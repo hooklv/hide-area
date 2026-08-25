@@ -1,13 +1,14 @@
 /** Step 3: SAM point prompts. The image embedding is computed once per photo. */
 
 import { drawLabel, drawPrompt, maskToCanvas } from '../ui/draw.js';
+import { maskCacheKey } from '../lib/session.js';
 
 export const name = 'Segment';
 export const canEnter = (state) => !!state.calibration.result?.ok;
 
 // Rebuilding the tinted mask bitmap costs a full-image ImageData pass, so it is
-// cached against the mask version and reused across pan/zoom frames.
-const maskCache = { version: -1, canvas: null };
+// cached against the image and mask version and reused across pan/zoom frames.
+const maskCache = { key: null, canvas: null };
 
 export function enter(app) {
   const { state, view } = app;
@@ -96,9 +97,10 @@ export function enter(app) {
   view.setDrawOverlay((ctx, v) => {
     const seg = state.segment;
     if (seg.mask) {
-      if (maskCache.version !== seg.version) {
+      const key = maskCacheKey(state);
+      if (maskCache.key !== key) {
         maskCache.canvas = maskToCanvas(seg.mask.data, seg.mask.width, seg.mask.height, maskCache.canvas);
-        maskCache.version = seg.version;
+        maskCache.key = key;
       }
       ctx.save();
       ctx.globalAlpha = 0.45;
@@ -133,6 +135,7 @@ export function enter(app) {
       view.render();
     } catch (err) {
       if (!isCurrent()) return;
+      next.disabled = true;
       setStatus(String(err.message || err), 'bad');
       retry.hidden = false;
     } finally {

@@ -9,6 +9,7 @@
 import { CanvasView } from './ui/canvasView.js';
 import { DebugLog } from './ui/debug.js';
 import { SamSession } from './lib/sam.js';
+import { initialState, resetState, setImageState } from './lib/session.js';
 import * as photo from './steps/photo.js';
 import * as calibrate from './steps/calibrate.js';
 import * as segment from './steps/segment.js';
@@ -16,18 +17,6 @@ import * as review from './steps/review.js';
 import * as result from './steps/result.js';
 
 const STEPS = [photo, calibrate, segment, review, result];
-
-function initialState() {
-  return {
-    step: 1,
-    imageId: 0,
-    image: null, // { canvas, imageData, width, height }
-    calibration: { taps: [], result: null },
-    segment: { points: [], mode: 1, mask: null, version: 0, ready: false, embeddedFor: -1, backend: null },
-    review: { polygon: null, fromVersion: -1, pixelCount: 0 },
-    result: null,
-  };
-}
 
 const stage = document.getElementById('stage');
 const stepsEl = document.getElementById('steps');
@@ -80,22 +69,13 @@ const app = {
       downscaledHeight: image.height,
       byteLength: image.imageData.data.byteLength,
     });
-    Object.assign(state, {
-      image,
-      imageId: state.imageId + 1,
-      calibration: { taps: [], result: null },
-      segment: { points: [], mode: 1, mask: null, version: state.segment.version + 1, ready: false, embeddedFor: -1, backend: state.segment.backend },
-      review: { polygon: null, fromVersion: -1, pixelCount: 0 },
-      result: null,
-    });
+    setImageState(state, image);
     emptyEl.hidden = true;
     view.setImage(image.canvas);
   },
 
   reset() {
-    const keepBackend = state.segment.backend;
-    Object.assign(state, initialState());
-    state.segment.backend = keepBackend;
+    resetState(state);
     emptyEl.hidden = false;
     view.source = null;
     view.setDrawOverlay(null);
