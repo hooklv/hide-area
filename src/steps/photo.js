@@ -48,8 +48,8 @@ export function enter(app) {
     <h2>1 · Photo</h2>
     <ul>
       <li>Lay the hide flat on the floor, no folds.</li>
-      <li>Put an A4 sheet flat on top of the hide.</li>
-      <li>Shoot from directly above. Whole hide and the whole sheet in frame.</li>
+      <li>Put an A4 sheet beside the hide, flat on the same floor.</li>
+      <li>Shoot from directly above. Keep the whole hide and A4 sheet large in frame.</li>
     </ul>
     <div class="row">
       <button class="btn primary wide" id="take">Take photo</button>
