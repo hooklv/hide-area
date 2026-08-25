@@ -62,3 +62,26 @@ Notes
   framing warning did not fire in any run.
 - Test 3 was shot from directly above, same as test 2. Its higher bias is
   not explained by the perimeter effect alone and remains open.
+
+  ## Run 2 — 2026-08-25, same scene, dm2 now displayed to one decimal
+
+Test 1 repeated after the display precision fix. Same room, same floor,
+reference A4 beside the object, shot straight down.
+
+| Test | Rep | Object | Tilt | Measured dm2 | Reference dm2 | mm/px | Vertices |
+|---|---|---|---|---|---|---|---|
+| 1 | 1 | A4 | 0 | 6.8 | 6.23 | 0.656 | 102 |
+| 1 | 2 | A4 | 0 | 6.7 | 6.23 | 0.804 | 96  |
+| 1 | 3 | A4 | 0 | 6.5 | 6.23 | 0.777 | 106 |
+
+Mean 6.67, bias +7.1%, spread 0.3 dm2 (4.8% of reference).
+
+Notes
+- The run 1 mean for this test was also 6.67 despite integer rounding, so the
+  rounding added noise but no bias. The +7.1% is a real systematic effect.
+- Consistent with a mask edge that sits a few millimetres outside the true
+  object boundary. A uniform 4 mm outward offset accounts for +7% on an A4
+  (1.01 m perimeter, 6.23 dm2) and for +1.7% on the 24.91 dm2 jig, which
+  matches the test 2 result. Larger objects are therefore less affected in
+  relative terms.
+- No manual outline corrections were made.
