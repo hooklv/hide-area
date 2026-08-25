@@ -36,16 +36,23 @@ export class SamSession {
     this.onLog = opts.onLog || (() => {});
     this.storage = opts.storage === undefined ? globalThis.localStorage : opts.storage;
     this.search = opts.search === undefined ? window.location.search : opts.search;
-    this.worker = (opts.workerFactory || (() => new Worker(new URL('./samWorker.js', import.meta.url), { type: 'module' })))();
+    this.workerFactory = opts.workerFactory || (() => new Worker(new URL('./samWorker.js', import.meta.url), { type: 'module' }));
+    this.worker = this.workerFactory();
     this.pending = new Map();
     this.nextId = 1;
     this.backend = null;
     this.closed = false;
     this.startedAt = performance.now();
     this.embedded = null;   // promise for the current photo's embedding
+    this.imageData = null;
+    this.recovery = null;
     this.queue = Promise.resolve();
     if (this.debug) console.debug('[SAM phase]', { phase: 'worker-created', ms: 0 });
     this.onLog('main', '[SAM phase]', { phase: 'worker-created', ms: 0 });
+    this._watchWorker();
+  }
+
+  _watchWorker() {
     this.worker.addEventListener('message', (event) => this._onMessage(event.data));
     this.worker.addEventListener('error', (event) => {
       this._fail(new Error(event.message || 'Worker failed'));
@@ -83,6 +90,11 @@ export class SamSession {
       this.onLog('worker', msg.message, msg.data);
       return;
     }
+    if (msg.type === 'gpu-fault') {
+      const entry = this.pending.get(msg.id);
+      if (entry) this._recoverFromGpuFault(msg, entry);
+      return;
+    }
     const entry = this.pending.get(msg.id);
     if (!entry) return;
     this.pending.delete(msg.id);
@@ -103,7 +115,7 @@ export class SamSession {
         this.onLog('main', 'RPC timeout', { phase: type, waitedMs: timeoutMs });
         this._fail(error);
       }, timeoutMs);
-      this.pending.set(id, { resolve, reject, timeout });
+      this.pending.set(id, { id, resolve, reject, timeout, type, body });
       this.worker.postMessage({ type, id, ...body }, transfer || []);
     });
   }
@@ -127,6 +139,7 @@ export class SamSession {
    * @param {ImageData} imageData the downscaled photo
    */
   setImage(imageData) {
+    this.imageData = imageData;
     const sourceBytes = imageData.data.byteLength;
     const copy = new Uint8ClampedArray(imageData.data); // detached into the worker
     if (this.debug) console.debug('[SAM phase]', { phase: 'image-transfer', byteLength: copy.byteLength, sourceBytes, sourceDetached: sourceBytes === 0 });
@@ -162,5 +175,47 @@ export class SamSession {
 
   terminate() {
     this._fail(new Error('SAM worker was terminated'));
+  }
+
+  async _recoverFromGpuFault(msg, entry) {
+    if (this.recovery) return;
+    this.pending.delete(entry.id);
+    clearTimeout(entry.timeout);
+    storeUnsafeWebGpu(this.storage, { message: `WebGPU failed: ${msg.message}`, details: msg.details });
+    this.onLog('main', 'WebGPU unsafe marker stored', { key: WEBGPU_UNSAFE_KEY, details: msg.details });
+    this.onStatus({ type: 'status', stage: 'backend-fallback', message: `WebGPU failed: ${msg.message}`, details: msg.details, persist: true });
+    this.worker.terminate();
+    this.worker = this.workerFactory();
+    this.pending.clear();
+    this.backend = null;
+    this.embedded = null;
+    this._watchWorker();
+    this.recovery = (async () => {
+      try {
+        this.backend = await this._send('init', { search: this.search, unsafeWebGpu: getUnsafeWebGpu(this.storage), forceWasm: true });
+        if (entry.type === 'init') {
+          entry.resolve(this.backend);
+          return;
+        }
+        if (!this.imageData) throw new Error('Cannot recover WebGPU: no image is loaded');
+        const embedded = await this._sendImage(this.imageData);
+        this.embedded = Promise.resolve(embedded);
+        if (entry.type === 'decode') entry.resolve(await this._send('decode', entry.body));
+        else entry.resolve(embedded);
+      } catch (error) {
+        entry.reject(error);
+      } finally {
+        this.recovery = null;
+      }
+    })();
+  }
+
+  _sendImage(imageData) {
+    const copy = new Uint8ClampedArray(imageData.data);
+    return this._send('embed', { image: { data: copy.buffer, width: imageData.width, height: imageData.height } }, [copy.buffer])
+      .then((result) => {
+        this.backend = result.backend || this.backend;
+        return result;
+      });
   }
 }
