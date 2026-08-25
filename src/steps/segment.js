@@ -69,6 +69,12 @@ export function enter(app) {
       setStatus(`Downloading the model, one time only… ${msg.progress}%`);
     } else if (msg.stage === 'load') {
       setStatus(`Starting the model on ${msg.device} (${msg.dtype})…`);
+    } else if (msg.stage === 'warning') {
+      setStatus(msg.message, 'bad');
+    } else if (msg.stage === 'error') {
+      state.segment.ready = false;
+      setStatus(msg.message, 'bad');
+      retry.hidden = false;
     } else if (msg.stage === 'phase') {
       console.debug('[SAM phase]', msg);
     }

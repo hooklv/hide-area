@@ -8,7 +8,13 @@
  * processor rescales them to the model's input size via reshape_input_points.
  */
 
+import { assessMaskQuality } from './maskQuality.js';
+
 const MODEL_ID = 'Xenova/slimsam-77-uniform';
+// The SlimSAM vision encoder requested this binding size on a real Android
+// device (WebGPU validation error: Binding size 805306368); keep this in sync
+// with a measured model requirement rather than assuming a generic GPU limit.
+const REQUIRED_STORAGE_BUFFER_BYTES = 805306368;
 let SamModel;
 let AutoProcessor;
 let RawImage;
@@ -22,6 +28,8 @@ let inputs = null;      // processor output for the current photo
 let embeddings = null;  // cached image embeddings for the current photo
 let imageSize = null;   // { width, height } in image space
 let loading = null;
+let webgpu = null;
+let gpuFailure = null;
 
 const post = (msg, transfer) => self.postMessage(msg, transfer || []);
 const stringify = (value) => {
@@ -30,6 +38,46 @@ const stringify = (value) => {
   try { return JSON.stringify(value); } catch { return String(value); }
 };
 const log = (message, data) => post({ type: 'log', message, data });
+
+function reportGpuFailure(error) {
+  if (gpuFailure) return;
+  gpuFailure = error instanceof Error ? error : new Error(String(error));
+  model = null;
+  embeddings = null;
+  const message = `WebGPU failed: ${gpuFailure.message}`;
+  log('WebGPU fatal error', message);
+  post({ type: 'status', stage: 'error', message });
+}
+
+function throwIfGpuFailed() {
+  if (gpuFailure) throw gpuFailure;
+}
+
+async function getWebGpu() {
+  if (webgpu) return webgpu;
+  if (!('gpu' in navigator)) return { supported: false, reason: 'navigator.gpu is unavailable' };
+  const adapter = await navigator.gpu.requestAdapter();
+  if (!adapter) return { supported: false, reason: 'No WebGPU adapter is available' };
+  const available = adapter.limits.maxStorageBufferBindingSize;
+  const supported = available >= REQUIRED_STORAGE_BUFFER_BYTES;
+  const details = { requiredStorageBufferBytes: REQUIRED_STORAGE_BUFFER_BYTES, availableStorageBufferBytes: available };
+  if (!supported) {
+    const reason = `maxStorageBufferBindingSize ${available} is below the ${REQUIRED_STORAGE_BUFFER_BYTES} bytes required by SlimSAM`;
+    log('WebGPU capability insufficient', { ...details, reason, forced: requestedBackend === 'webgpu' });
+    post({ type: 'status', stage: 'warning', message: `WebGPU unavailable: ${reason}` });
+    if (requestedBackend !== 'webgpu') return { supported, reason, ...details };
+  }
+  // Request the adapter's highest storage-binding limit. Transformers.js 3.7.6
+  // forwards session_options to ONNX Runtime, which accepts this GPUDevice.
+  const device = await adapter.requestDevice(supported
+    ? { requiredLimits: { maxStorageBufferBindingSize: available } }
+    : undefined);
+  device.addEventListener('uncapturederror', (event) => reportGpuFailure(event.error));
+  device.lost.then((info) => reportGpuFailure(new Error(`WebGPU device lost: ${info.message || info.reason || 'unknown reason'}`)));
+  webgpu = { supported, device, ...details };
+  log('WebGPU device configured', { ...details, requestedStorageBufferBytes: supported ? available : 'default', forced: requestedBackend === 'webgpu' });
+  return webgpu;
+}
 
 log('worker module entry');
 
@@ -104,13 +152,25 @@ async function loadModel() {
   processor = await withTimeout(AutoProcessor.from_pretrained(MODEL_ID), 'processor load');
   // Pin WebGPU to fp32: reduced precision model weights can collapse SAM logits.
   const candidates = requestedBackend ? [requestedBackend] : ['webgpu', 'wasm'];
-  const attempts = candidates.map((device) => ({ device, dtype: 'fp32' }));
   let lastError = null;
-  for (const options of attempts) {
-    if (options.device === 'webgpu' && !('gpu' in navigator)) continue;
+  for (const device of candidates) {
+    if (device === 'webgpu') {
+      const capability = await getWebGpu();
+      if (!capability.supported && requestedBackend !== 'webgpu') continue;
+      if (!capability.device) {
+        lastError = new Error(capability.reason || 'No WebGPU device is available');
+        continue;
+      }
+    }
+    const options = {
+      device,
+      dtype: 'fp32',
+      ...(device === 'webgpu' ? { session_options: { executionProviders: [{ name: 'webgpu', device: webgpu.device }] } } : {}),
+    };
     try {
       post({ type: 'status', stage: 'load', device: options.device, dtype: options.dtype });
       model = await withTimeout(SamModel.from_pretrained(MODEL_ID, { ...options, progress_callback }), 'model load');
+      throwIfGpuFailed();
       backend = options.device;
       dtype = options.dtype;
       post({ type: 'status', stage: 'phase', phase: 'model-load-finished', backend, dtype });
@@ -138,12 +198,15 @@ async function load() {
 
 async function embed(image) {
   await load();
+  throwIfGpuFailed();
   post({ type: 'status', stage: 'phase', phase: 'image-transferred', byteLength: image.data.byteLength, detached: image.data.byteLength === 0 });
   post({ type: 'status', stage: 'phase', phase: 'embedding-started' });
   const raw = new RawImage(new Uint8ClampedArray(image.data), image.width, image.height, 4).rgb();
   imageSize = { width: image.width, height: image.height };
   inputs = await processor(raw);
   embeddings = await model.get_image_embeddings(inputs);
+  if (webgpu?.device) await webgpu.device.queue.onSubmittedWorkDone();
+  throwIfGpuFailed();
   post({ type: 'status', stage: 'phase', phase: 'embedding-finished' });
   return { backend, dtype };
 }
@@ -151,6 +214,7 @@ async function embed(image) {
 /** @param {{x:number,y:number,label:number}[]} points image space, label 1 = add, 0 = remove */
 async function decode(points) {
   if (!embeddings) throw new Error('Image embedding is not ready');
+  throwIfGpuFailed();
   post({ type: 'status', stage: 'phase', phase: 'decode-started' });
   const coords = [points.map((p) => [p.x, p.y])];
   const labels = [points.map((p) => p.label)];
@@ -158,6 +222,8 @@ async function decode(points) {
   const input_labels = processor.image_processor.add_input_labels(labels, input_points);
 
   const outputs = await model({ ...embeddings, input_points, input_labels });
+  if (webgpu?.device) await webgpu.device.queue.onSubmittedWorkDone();
+  throwIfGpuFailed();
   const masks = await processor.post_process_masks(
     outputs.pred_masks, inputs.original_sizes, inputs.reshaped_input_sizes, { binarize: false },
   );
@@ -195,6 +261,12 @@ async function decode(points) {
     modelPoints: promptTensor,
     modelLabels: Array.from(input_labels.data, Number),
   };
+  const quality = assessMaskQuality(mask, width, height);
+  debug.quality = quality;
+  if (!quality.ok) {
+    log('SAM mask rejected', { ...quality, selectedMaskIndex: best, selectedIouScore: scores[best] });
+    throw new Error(`Segmentation failed: ${quality.reason} Retry with another prompt or use WASM.`);
+  }
   console.debug('[SAM decode diagnostics]', debug);
   post({ type: 'status', stage: 'phase', phase: 'decode-finished' });
   return {
