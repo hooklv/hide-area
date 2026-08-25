@@ -9,6 +9,7 @@
  */
 
 import { assessMaskQuality } from './maskQuality.js';
+import { chooseBackendCandidates, planGpuFallback } from './samBackend.js';
 
 const MODEL_ID = 'Xenova/slimsam-77-uniform';
 // The SlimSAM vision encoder requested this binding size on a real Android
@@ -32,6 +33,9 @@ let imageSize = null;   // { width, height } in image space
 let loading = null;
 let webgpu = null;
 let gpuFailure = null;
+let unsafeWebGpu = null;
+let forceWasm = false;
+let fallbackReason = null;
 
 const post = (msg, transfer) => self.postMessage(msg, transfer || []);
 const stringify = (value) => {
@@ -52,15 +56,33 @@ function isModelRequest(url) {
 function reportGpuFailure(error) {
   if (gpuFailure) return;
   gpuFailure = error instanceof Error ? error : new Error(String(error));
-  model = null;
-  embeddings = null;
-  const message = `WebGPU failed: ${gpuFailure.message}`;
-  log('WebGPU fatal error', message);
-  post({ type: 'status', stage: 'error', message });
+  log('WebGPU failure detected', { message: gpuFailure.message, limits: webgpu });
 }
 
 function throwIfGpuFailed() {
-  if (gpuFailure) throw gpuFailure;
+  if (backend === 'webgpu' && gpuFailure) throw gpuFailure;
+}
+
+function fallbackDetails() {
+  return {
+    requiredStorageBufferBytes: webgpu?.requiredStorageBufferBytes,
+    availableStorageBufferBytes: webgpu?.availableStorageBufferBytes,
+    reason: gpuFailure?.message || unsafeWebGpu?.reason || 'WebGPU was previously marked unsafe',
+  };
+}
+
+function markWebGpuUnsafe() {
+  const details = fallbackDetails();
+  unsafeWebGpu = details;
+  forceWasm = true;
+  fallbackReason = details.reason;
+  model = null;
+  embeddings = null;
+  backend = null;
+  dtype = null;
+  post({ type: 'status', stage: 'backend-fallback', message: `WebGPU failed: ${details.reason}`, details, persist: true });
+  log('Falling back from WebGPU to WASM', details);
+  return details;
 }
 
 async function getWebGpu() {
@@ -170,7 +192,12 @@ async function loadModel() {
   post({ type: 'status', stage: 'phase', phase: 'model-load-started' });
   processor = await withTimeout(AutoProcessor.from_pretrained(MODEL_ID), 'processor load');
   // Pin WebGPU to fp32: reduced precision model weights can collapse SAM logits.
-  const candidates = requestedBackend ? [requestedBackend] : ['webgpu', 'wasm'];
+  const candidates = chooseBackendCandidates({ requestedBackend, unsafeWebGpu, forceWasm });
+  if (unsafeWebGpu && !requestedBackend) {
+    const details = fallbackDetails();
+    post({ type: 'status', stage: 'backend-fallback', message: `WebGPU was skipped: ${details.reason}`, details, persist: false });
+    log('WebGPU skipped from persisted unsafe state', details);
+  }
   let lastError = null;
   for (const device of candidates) {
     if (device === 'webgpu') {
@@ -189,7 +216,7 @@ async function loadModel() {
     try {
       post({ type: 'status', stage: 'load', device: options.device, dtype: options.dtype });
       model = await withTimeout(SamModel.from_pretrained(MODEL_ID, { ...options, progress_callback }), 'model load');
-      throwIfGpuFailed();
+      if (device === 'webgpu' && gpuFailure) throw gpuFailure;
       backend = options.device;
       dtype = options.dtype;
       if (!modelCacheMiss) post({ type: 'status', stage: 'model-cache', hit: true });
@@ -198,9 +225,28 @@ async function loadModel() {
     } catch (err) {
       lastError = err;
       model = null;
+      if (device === 'webgpu') {
+        reportGpuFailure(err);
+        markWebGpuUnsafe();
+      }
     }
   }
   throw lastError || new Error('No inference backend available');
+}
+
+async function fallbackToWasm() {
+  if (backend !== 'webgpu') throw gpuFailure || new Error('WebGPU fallback requested without an active WebGPU backend');
+  const plan = planGpuFallback('inference');
+  if (!plan.discardGpuState) throw new Error('WebGPU fallback must discard GPU state');
+  markWebGpuUnsafe();
+  const loadedBackend = await load();
+  if (loadedBackend !== plan.backend) throw new Error(`WebGPU fallback selected ${loadedBackend}, expected ${plan.backend}`);
+}
+
+async function createEmbedding() {
+  embeddings = await model.get_image_embeddings(inputs);
+  if (backend === 'webgpu' && webgpu?.device) await webgpu.device.queue.onSubmittedWorkDone();
+  throwIfGpuFailed();
 }
 
 async function load() {
@@ -218,32 +264,44 @@ async function load() {
 
 async function embed(image) {
   await load();
-  throwIfGpuFailed();
   post({ type: 'status', stage: 'phase', phase: 'image-transferred', byteLength: image.data.byteLength, detached: image.data.byteLength === 0 });
   post({ type: 'status', stage: 'phase', phase: 'embedding-started' });
   const raw = new RawImage(new Uint8ClampedArray(image.data), image.width, image.height, 4).rgb();
   imageSize = { width: image.width, height: image.height };
   inputs = await processor(raw);
-  embeddings = await model.get_image_embeddings(inputs);
-  if (webgpu?.device) await webgpu.device.queue.onSubmittedWorkDone();
-  throwIfGpuFailed();
+  try {
+    await createEmbedding();
+  } catch (error) {
+    if (backend !== 'webgpu') throw error;
+    reportGpuFailure(error);
+    await fallbackToWasm();
+    await createEmbedding();
+  }
   post({ type: 'status', stage: 'phase', phase: 'embedding-finished' });
-  return { backend, dtype };
+  return { backend, dtype, fallbackReason };
 }
 
 /** @param {{x:number,y:number,label:number}[]} points image space, label 1 = add, 0 = remove */
 async function decode(points) {
   if (!embeddings) throw new Error('Image embedding is not ready');
-  throwIfGpuFailed();
   post({ type: 'status', stage: 'phase', phase: 'decode-started' });
   const coords = [points.map((p) => [p.x, p.y])];
   const labels = [points.map((p) => p.label)];
   const input_points = processor.reshape_input_points(coords, inputs.original_sizes, inputs.reshaped_input_sizes);
   const input_labels = processor.image_processor.add_input_labels(labels, input_points);
 
-  const outputs = await model({ ...embeddings, input_points, input_labels });
-  if (webgpu?.device) await webgpu.device.queue.onSubmittedWorkDone();
-  throwIfGpuFailed();
+  let outputs;
+  try {
+    outputs = await model({ ...embeddings, input_points, input_labels });
+    if (backend === 'webgpu' && webgpu?.device) await webgpu.device.queue.onSubmittedWorkDone();
+    throwIfGpuFailed();
+  } catch (error) {
+    if (backend !== 'webgpu') throw error;
+    reportGpuFailure(error);
+    await fallbackToWasm();
+    await createEmbedding();
+    outputs = await model({ ...embeddings, input_points, input_labels });
+  }
   const masks = await processor.post_process_masks(
     outputs.pred_masks, inputs.original_sizes, inputs.reshaped_input_sizes, { binarize: false },
   );
@@ -297,6 +355,7 @@ async function decode(points) {
       score: scores[best],
       backend,
       dtype,
+      fallbackReason,
       debug,
     },
     transfer: [mask.buffer],
@@ -309,6 +368,7 @@ self.addEventListener('message', async (event) => {
     if (type === 'init') {
       requestedBackend = new URLSearchParams(rest.search).get('backend');
       debugEnabled = new URLSearchParams(rest.search).get('debug') === '1';
+      unsafeWebGpu = rest.unsafeWebGpu;
       if (requestedBackend && !['wasm', 'webgpu'].includes(requestedBackend)) {
         throw new Error(`Unsupported backend '${requestedBackend}'. Use wasm or webgpu.`);
       }

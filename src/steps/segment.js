@@ -76,6 +76,8 @@ export function enter(app) {
       setStatus(`Starting the model on ${msg.device} (${msg.dtype})…`);
     } else if (msg.stage === 'warning') {
       setStatus(msg.message, 'bad');
+    } else if (msg.stage === 'backend-fallback') {
+      setStatus(`${msg.message} Continuing on WASM.`, 'bad');
     } else if (msg.stage === 'error') {
       state.segment.ready = false;
       setStatus(msg.message, 'bad');
@@ -131,7 +133,8 @@ export function enter(app) {
       state.segment.version++;
       next.disabled = false;
       state.segment.backend = out.backend || state.segment.backend;
-      setStatus(`Mask updated in ${out.ms} ms · ${state.segment.backend} (${out.dtype}) · confidence ${(out.score * 100).toFixed(0)}%`, 'ok');
+      const fallback = out.fallbackReason ? ` WebGPU failed: ${out.fallbackReason}.` : '';
+      setStatus(`Mask updated in ${out.ms} ms · ${state.segment.backend} (${out.dtype}) · confidence ${(out.score * 100).toFixed(0)}%.${fallback}`, fallback ? 'bad' : 'ok');
       view.render();
     } catch (err) {
       if (!isCurrent()) return;
@@ -164,7 +167,8 @@ export function enter(app) {
         if (!isCurrent()) return;
         state.segment.embeddedFor = state.imageId;
         state.segment.backend = res.backend || state.segment.backend;
-        setStatus(`Ready in ${res.ms} ms on ${state.segment.backend}. Tap the hide.`, 'ok');
+        const fallback = res.fallbackReason ? ` WebGPU failed: ${res.fallbackReason}.` : '';
+        setStatus(`Ready in ${res.ms} ms on ${state.segment.backend}.${fallback} Tap the hide.`, fallback ? 'bad' : 'ok');
       } else {
         setStatus(`Ready on ${state.segment.backend}. Tap the hide.`, 'ok');
       }

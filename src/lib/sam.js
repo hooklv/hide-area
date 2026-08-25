@@ -3,13 +3,40 @@
  * and interactive mask decodes. All coordinates are image space.
  */
 
+import { WEBGPU_UNSAFE_KEY, initialBackendRequest } from './samBackend.js';
+
+function getUnsafeWebGpu(storage) {
+  try {
+    const value = storage?.getItem(WEBGPU_UNSAFE_KEY);
+    return value ? JSON.parse(value) : null;
+  } catch {
+    return null;
+  }
+}
+
+function clearUnsafeWebGpu(storage) {
+  try { storage?.removeItem(WEBGPU_UNSAFE_KEY); } catch { /* Storage may be unavailable. */ }
+}
+
+function storeUnsafeWebGpu(storage, status) {
+  try {
+    storage?.setItem(WEBGPU_UNSAFE_KEY, JSON.stringify({
+      reason: status.message,
+      details: status.details,
+      recordedAt: new Date().toISOString(),
+    }));
+  } catch { /* Storage may be unavailable. */ }
+}
+
 export class SamSession {
   /** @param {{debug?:boolean,onStatus?:(s:{stage:string, progress?:number, device?:string, dtype?:string})=>void,onLog?:(source:string,message:string,data?:unknown)=>void}} [opts] */
   constructor(opts = {}) {
     this.debug = opts.debug === true;
     this.onStatus = opts.onStatus || (() => {});
     this.onLog = opts.onLog || (() => {});
-    this.worker = new Worker(new URL('./samWorker.js', import.meta.url), { type: 'module' });
+    this.storage = opts.storage === undefined ? globalThis.localStorage : opts.storage;
+    this.search = opts.search === undefined ? window.location.search : opts.search;
+    this.worker = (opts.workerFactory || (() => new Worker(new URL('./samWorker.js', import.meta.url), { type: 'module' })))();
     this.pending = new Map();
     this.nextId = 1;
     this.backend = null;
@@ -42,6 +69,10 @@ export class SamSession {
 
   _onMessage(msg) {
     if (msg.type === 'status') {
+      if (msg.stage === 'backend-fallback' && msg.persist) {
+        storeUnsafeWebGpu(this.storage, msg);
+        this.onLog('main', 'WebGPU unsafe marker stored', { key: WEBGPU_UNSAFE_KEY, details: msg.details });
+      }
       const phase = { ...msg, ms: Math.round(performance.now() - this.startedAt) };
       if (this.debug) console.debug('[SAM phase]', phase);
       this.onLog('worker', '[SAM phase]', phase);
@@ -79,7 +110,14 @@ export class SamSession {
 
   /** Load the model (downloads on first run) and report the active backend. */
   async init() {
-    if (!this.backend) this.backend = await this._send('init', { search: window.location.search });
+    if (!this.backend) {
+      const { forcedWebGpu, unsafeWebGpu } = initialBackendRequest(this.search, getUnsafeWebGpu(this.storage));
+      if (forcedWebGpu) clearUnsafeWebGpu(this.storage);
+      this.backend = await this._send('init', {
+        search: this.search,
+        unsafeWebGpu,
+      });
+    }
     return this.backend;
   }
 
