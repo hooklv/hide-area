@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+  <meta name="color-scheme" content="dark">
+  <meta name="theme-color" content="#111214">
+  <title>Hide area</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23111214'/%3E%3Cpath d='M14 22c6-8 12-6 18-6s12-2 18 6c4 6-2 10-2 16s3 10-3 12c-8 3-18 3-26 0-6-2-3-6-3-12s-6-10-2-16z' fill='none' stroke='%2372e08a' stroke-width='3.5' stroke-linejoin='round'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/src/styles.css">
+</head>
+<body>
+  <header class="top">
+    <h1>Hide area</h1>
+    <ol class="steps" id="steps"></ol>
+  </header>
+
+  <main class="stage" id="stage">
+    <canvas id="photo" class="layer"></canvas>
+    <canvas id="overlay" class="layer"></canvas>
+    <div class="stage-empty" id="stage-empty">No photo yet</div>
+  </main>
+
+  <section class="panel" id="panel"></section>
+
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>
