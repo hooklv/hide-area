@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { chooseBackendCandidates, initialBackendRequest, planGpuFallback, WEBGPU_UNSAFE_KEY } from '../src/lib/samBackend.js';
+import { chooseBackendCandidates, initialBackendRequest, WEBGPU_UNSAFE_KEY } from '../src/lib/samBackend.js';
 import { SamSession } from '../src/lib/sam.js';
 
 function fakeStorage(initial = {}) {
@@ -31,20 +31,18 @@ class FakeWorker {
     this.listeners.get('message')?.({ data: message });
   }
 
-  terminate() {}
+  terminate() { this.terminated = true; }
 }
 
-function sessionWith(worker, storage, search = '') {
-  return new SamSession({ workerFactory: () => worker, storage, search });
+function sessionWith(workerFactory, storage, search = '') {
+  return new SamSession({ workerFactory, storage, search });
 }
 
 describe('SAM backend fallback policy', () => {
-  it('selects WASM after a latched GPU failure, even for a forced WebGPU diagnostic run', () => {
-    expect(chooseBackendCandidates({ requestedBackend: 'webgpu', unsafeWebGpu: null })).toEqual(['webgpu', 'wasm']);
+  it('uses a separate forced-WASM replacement after a WebGPU diagnostic run faults', () => {
+    expect(chooseBackendCandidates({ requestedBackend: 'webgpu', unsafeWebGpu: null })).toEqual(['webgpu']);
     expect(chooseBackendCandidates({ requestedBackend: 'webgpu', unsafeWebGpu: null, forceWasm: true })).toEqual(['wasm']);
 
-    const fallback = planGpuFallback('decode');
-    expect(fallback).toEqual({ backend: 'wasm', retryOperation: 'decode', discardGpuState: true });
   });
 
   it('persists a runtime GPU fault and passes it to the next session, which skips WebGPU', async () => {
@@ -52,7 +50,7 @@ describe('SAM backend fallback policy', () => {
     const firstWorker = new FakeWorker((message, worker) => {
       if (message.type === 'init') worker.emit({ type: 'ready', id: message.id, backend: 'webgpu' });
     });
-    const first = sessionWith(firstWorker, storage);
+    const first = sessionWith(() => firstWorker, storage);
     await first.init();
     firstWorker.emit({
       type: 'status',
@@ -73,7 +71,7 @@ describe('SAM backend fallback policy', () => {
       attempted = chooseBackendCandidates({ requestedBackend: null, unsafeWebGpu: message.unsafeWebGpu });
       worker.emit({ type: 'ready', id: message.id, backend: attempted[0] });
     });
-    const second = sessionWith(secondWorker, storage);
+    const second = sessionWith(() => secondWorker, storage);
     await expect(second.init()).resolves.toBe('wasm');
     expect(attempted).toEqual(['wasm']);
   });
@@ -87,38 +85,70 @@ describe('SAM backend fallback policy', () => {
         fakeWorker.emit({ type: 'ready', id: message.id, backend: 'webgpu' });
       }
     });
-    const session = sessionWith(worker, storage, '?backend=webgpu');
+    const session = sessionWith(() => worker, storage, '?backend=webgpu');
 
     await expect(session.init()).resolves.toBe('webgpu');
     expect(storage.getItem(WEBGPU_UNSAFE_KEY)).toBeNull();
     expect(initMessage.unsafeWebGpu).toBeNull();
-    expect(chooseBackendCandidates({ requestedBackend: 'webgpu', unsafeWebGpu: null })).toEqual(['webgpu', 'wasm']);
+    expect(chooseBackendCandidates({ requestedBackend: 'webgpu', unsafeWebGpu: null })).toEqual(['webgpu']);
     expect(chooseBackendCandidates({ requestedBackend: 'webgpu', unsafeWebGpu: null, forceWasm: true })).toEqual(['wasm']);
   });
 
-  it('returns only the WASM result after an embedding or decode fallback', async () => {
+  it('recovers an initialization fault with a forced-WASM replacement before an image exists', async () => {
+    const storage = fakeStorage();
+    const faultedWorker = new FakeWorker((message, fakeWorker) => {
+      if (message.type === 'init') fakeWorker.emit({ type: 'gpu-fault', id: message.id, message: 'model load fault', details: {} });
+    });
+    let replacementInit;
+    const replacementWorker = new FakeWorker((message, fakeWorker) => {
+      if (message.type !== 'init') return;
+      replacementInit = message;
+      fakeWorker.emit({ type: 'ready', id: message.id, backend: 'wasm' });
+    });
+    const workers = [faultedWorker, replacementWorker];
+    const session = sessionWith(() => workers.shift(), storage, '?backend=webgpu');
+
+    await expect(session.init()).resolves.toBe('wasm');
+    expect(faultedWorker.terminated).toBe(true);
+    expect(replacementInit.forceWasm).toBe(true);
+  });
+
+  it('replaces the faulted worker and returns only the replacement WASM decode', async () => {
     const storage = fakeStorage();
     const wasmDecodeMask = new Uint8Array([0, 1, 0, 1]);
-    const worker = new FakeWorker((message, fakeWorker) => {
+    const faultedWorker = new FakeWorker((message, fakeWorker) => {
       if (message.type === 'init') {
         fakeWorker.emit({ type: 'ready', id: message.id, backend: 'webgpu' });
       } else if (message.type === 'embed') {
-        fakeWorker.emit({ type: 'status', stage: 'backend-fallback', persist: true, message: 'WebGPU failed: embedding fault' });
+        fakeWorker.emit({ type: 'done', id: message.id, payload: { backend: 'webgpu', dtype: 'fp32', ms: 1 } });
+      } else if (message.type === 'decode') {
+        fakeWorker.emit({ type: 'gpu-fault', id: message.id, message: 'decode fault', details: { source: 'ORT device' } });
+      }
+    });
+    let replacementInit;
+    const replacementWorker = new FakeWorker((message, fakeWorker) => {
+      if (message.type === 'init') {
+        replacementInit = message;
+        fakeWorker.emit({ type: 'ready', id: message.id, backend: 'wasm' });
+      } else if (message.type === 'embed') {
         fakeWorker.emit({ type: 'done', id: message.id, payload: { backend: 'wasm', dtype: 'fp32', ms: 1 } });
       } else if (message.type === 'decode') {
-        fakeWorker.emit({ type: 'status', stage: 'backend-fallback', persist: true, message: 'WebGPU failed: decode fault' });
         fakeWorker.emit({ type: 'done', id: message.id, payload: { backend: 'wasm', dtype: 'fp32', ms: 1, mask: wasmDecodeMask } });
       }
     });
-    const session = sessionWith(worker, storage);
+    const workers = [faultedWorker, replacementWorker];
+    const session = sessionWith(() => workers.shift(), storage, '?backend=webgpu');
     await session.init();
     const embedded = await session.setImage({ data: new Uint8ClampedArray(4), width: 1, height: 1 });
     const decoded = await session.decode([{ x: 0, y: 0, label: 1 }]);
 
-    expect(embedded.backend).toBe('wasm');
+    expect(embedded.backend).toBe('webgpu');
     expect(embedded.mask).toBeUndefined();
     expect(decoded.backend).toBe('wasm');
     expect(decoded.mask).toBe(wasmDecodeMask);
+    expect(faultedWorker.terminated).toBe(true);
+    expect(replacementInit.forceWasm).toBe(true);
+    expect(replacementInit.unsafeWebGpu).toMatchObject({ reason: 'WebGPU failed: decode fault' });
   });
 
   it('does not override a forced WebGPU retry with the stored marker', () => {
