@@ -68,6 +68,8 @@ The four corners of the A4 sheet give a homography, which converts image pixels 
 
 **3. Photograph from above.** The whole hide and the whole A4 sheet in frame. Keep the A4 as large in the photo as practical; the app warns when its long edge is under 300 pixels. A cowhide at four to five square metres needs two and a half to three metres of height, or a stepladder, or a mezzanine. Tilt is corrected by the homography, but less tilt wastes fewer pixels on foreshortening.
 
+**Shoot straight down; keep the A4 near the hide and the frame centre.**
+
 **4. Tap the four corners of the sheet.** Order does not matter.
 
 **5. Tap once inside the hide.** Wait a few seconds while the model builds the image embedding. The mask appears as a translucent overlay.

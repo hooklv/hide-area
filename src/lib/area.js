@@ -45,13 +45,13 @@ export function convertArea(mm2) {
   return { mm2, dm2: mm2 / MM2_PER_DM2, m2, sqft: m2 * SQFT_PER_M2 };
 }
 
-/** Display strings at the precision the UI shows: m^2 two decimals,
- *  dm^2 whole, sq ft one decimal. */
+/** Display strings at the precision the UI shows: m^2 and dm^2 one decimal,
+ *  sq ft one decimal. */
 export function formatArea(mm2) {
   const a = convertArea(mm2);
   return {
     m2: a.m2.toFixed(2),
-    dm2: String(Math.round(a.dm2)),
+    dm2: a.dm2.toFixed(1),
     sqft: a.sqft.toFixed(1),
     raw: a,
   };

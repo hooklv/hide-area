@@ -49,7 +49,7 @@ export function enter(app) {
     <ul>
       <li>Lay the hide flat on the floor, no folds.</li>
       <li>Put an A4 sheet beside the hide, flat on the same floor.</li>
-      <li>Shoot from directly above. Keep the whole hide and A4 sheet large in frame.</li>
+      <li>Shoot straight down; keep the A4 near the hide and frame centre.</li>
     </ul>
     <div class="row">
       <button class="btn primary wide" id="take">Take photo</button>

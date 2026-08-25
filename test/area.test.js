@@ -53,14 +53,14 @@ describe('units', () => {
   it('formats at the precision the UI shows', () => {
     const f = formatArea(62370);
     expect(f.m2).toBe('0.06');
-    expect(f.dm2).toBe('6');
+    expect(f.dm2).toBe('6.2');
     expect(f.sqft).toBe('0.7');
   });
 
   it('formats a full hide', () => {
     const f = formatArea(4.85e6);
     expect(f.m2).toBe('4.85');
-    expect(f.dm2).toBe('485');
+    expect(f.dm2).toBe('485.0');
     expect(f.sqft).toBe('52.2');
   });
 });
