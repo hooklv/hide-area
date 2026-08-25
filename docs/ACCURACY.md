@@ -10,13 +10,13 @@ with no manual outline corrections.
 
 **1. The hide is not flat.** Folds, curled edges and a raised centre all lower the measured area, and no software step compensates for this. On an unflattened hide this dominates everything else and can easily exceed 5%. It is a handling discipline problem, not a code problem. The physical tests used flat white paper, so they do not measure this error.
 
-**2. Top-down calibration and measurement.** On the 24.91 dm2 flat rectangle, shot straight down with the A4 beside it, the mean measured area was 25.33 dm2: about **+1.7% over-measurement**. Treat this as about +2% for this tested setup. The separate A4-object test is not usable for estimating bias because its whole-dm2 display rounding is +/- 8%.
+**2. Top-down calibration and measurement.** On the 24.91 dm2 flat rectangle, shot straight down with the A4 beside it, the mean measured area was 25.33 dm2: about **+1.7% over-measurement**. Treat this as about +2% for this tested setup. The repeated A4-object test measured 6.67 dm2 against 6.23 dm2, a **+7.1% bias**. Its earlier whole-dm2 display run had the same 6.67 dm2 mean: rounding added apparent spread but did not create this bias.
 
 **3. Camera tilt.** This is the largest measured software-side error. The same 24.91 dm2 rectangle at about 30 degrees had a mean measured area of 27.00 dm2, or **+8.4%**. That is roughly **+7 percentage points beyond the top-down bias**. The homography is fitted on the small A4 patch and extrapolated across a much larger object; tilt makes that extrapolation diverge. Shoot straight down, and keep the reference near the object and near the centre of the frame.
 
 **4. Corner-tap precision.** Across runs of the same scene, the reported scale varied from 0.837 to 0.910 mm/px, roughly 5% in length and 10% in area, while the object's pixel footprint stayed nearly constant. This is measured evidence that calibration taps, not the mask, drive the run-to-run spread. The flat rectangle's top-down runs span 4.0% of the reference area; the irregular figure spans 10.3%. The figure's mean was +6.8%, which is higher than the rectangle and remains unexplained.
 
-**5. Mask edge and outline.** The physical tests used flat white paper, not real hide. They therefore say nothing about segmentation quality on leather, including mask-edge error, shadows, background similarity or manual outline correction. The previous few-pixel edge estimate remains unmeasured for real hide rather than a verified error figure.
+**5. Mask edge and outline.** The physical tests used flat white paper, not real hide. The A4's +7.1% bias and the larger rectangle's +1.7% bias are consistent with, but do not directly measure, an approximately 4 mm uniform outward paper-mask boundary. A fixed boundary offset has a larger percentage effect on a small A4 than on the larger rectangle. This is a working explanation for the paper results, not a real-hide correction: do not add erosion or apply a percentage adjustment to a hide. The tests say nothing about segmentation quality on leather, including mask-edge error, shadows, background similarity or manual outline correction.
 
 Polygon simplification to 100 to 300 vertices was not isolated by these tests. The earlier synthetic result is not a physical accuracy measurement.
 
@@ -34,7 +34,7 @@ The first four tests below have been run three times and are recorded in `MEASUR
 
 | # | Setup | Expected | What it proves |
 |---|---|---|---|
-| 1 | Two A4 sheets side by side on a contrasting floor. Calibrate on one, measure the other. | 0.0623 m² | Whole pipeline end to end; display rounding made this result unusable for bias. |
+| 1 | Two A4 sheets side by side on a contrasting floor. Calibrate on one, measure the other. | 0.0623 m² | Whole pipeline end to end; repeated one-decimal readings establish a +7.1% paper-object bias. |
 | 2 | Four A4 sheets taped into a 420 x 594 mm rectangle. Calibrate on a separate loose A4. | 0.2494 m² | Top-down baseline when the object is much larger than the reference. |
 | 3 | Cut an irregular wavy shape from the test 2 rectangle. Measure each removed piece with a ruler and subtract. | 0.2494 m² minus removed | Complex contour with concavities; the higher measured bias remains open. |
 | 4 | Repeat test 2 with the camera at roughly 30° from vertical. | 0.2494 m² | Effect of perspective on the full physical workflow. |
@@ -76,7 +76,7 @@ The 12 raw runs, device conditions and reference dimensions are recorded in
 
 | Test | Mean (dm2) | Reference (dm2) | Bias | Spread | Interpretation |
 |---|---:|---:|---:|---:|---|
-| A4 object, top-down | 6.67 | 6.23 | +7.1% | 16.0% | Rounding-dominated; not usable for bias. |
+| A4 object, top-down | 6.67 | 6.23 | +7.1% | 4.8% | Small-object paper bias; consistent with an inferred outward boundary offset. |
 | 420 x 594 mm rectangle, top-down | 25.33 | 24.91 | +1.7% | 4.0% | Best top-down baseline. |
 | Irregular figure, top-down | 20.67 | 19.35 | +6.8% | 10.3% | Higher bias remains open. |
 | 420 x 594 mm rectangle, about 30 degrees | 27.00 | 24.91 | +8.4% | 8.0% | Tilt adds about 7 percentage points. |
