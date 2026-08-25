@@ -78,7 +78,7 @@ Do not break these without saying so explicitly and updating this file.
 - `optimizeDeps.include: ['@huggingface/transformers']` pre-bundles the inference dependency to avoid development-time dependency churn while a photo is in progress.
 - `worker.format: 'es'` keeps the SAM worker an ES module.
 - `@huggingface/transformers` is pinned exactly to `3.7.6`. The worker calls `processor.reshape_input_points` and `image_processor.add_input_labels` directly, so do not add a caret or update the package without validating prompt scaling on a real photo.
-- `samWorker.js` sets `env.allowLocalModels = false`; this app does not bundle a local model directory. Its worker URL inherits `window.location.search`, which carries supported inference flags to the worker.
+- `samWorker.js` sets `env.allowLocalModels = false`; this app does not bundle a local model directory. Its `init` message carries supported inference flags to the worker.
 
 ## Commands
 
@@ -89,10 +89,11 @@ npm run dev -- --host    # reachable from a phone on the same Wi-Fi
 npm test                 # vitest run, currently 55 tests
 npm run test:watch       # Vitest watch mode
 npm run build            # production bundle to dist, under 1 s
+npm run check:bundle     # build and reject unresolved bare imports in emitted JavaScript
 npm run preview          # serve the built bundle
 ```
 
-`npm test && npm run build` is the repository verification gate. Run both before reporting a task complete, and report the actual output rather than an assumption.
+`npm test && npm run check:bundle` is the repository verification gate. Run both before reporting a task complete, and report the actual output rather than an assumption.
 
 ## Debug flags
 
@@ -105,6 +106,8 @@ Segmentation diagnostics (logit min/max/mean, selected candidate index, IoU scor
 ## Real-photo fixture
 
 `test/fixtures/a4-on-floor.jpeg` is the canonical real-phone segmentation fixture: it has EXIF `upper-right` orientation, canonical A4 metadata in orientation-normalized decoded space, and must replace generated rectangles in browser reproductions. `load.js` asserts its 3000 x 4000 portrait decode and returns coordinates scaled to the actual runtime image; Vitest verifies geometry and the stored browser-generated mask, while browser automation remains the authoritative real SAM inference check.
+
+All browser verification of segmentation must run against `npm run preview` served from a subpath, never `npm run dev`.
 
 ## What not to do
 

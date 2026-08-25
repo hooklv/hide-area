@@ -8,16 +8,11 @@
  * processor rescales them to the model's input size via reshape_input_points.
  */
 
-import { SamModel, AutoProcessor, RawImage, Tensor, env } from '@huggingface/transformers';
-
-env.allowLocalModels = false; // this app has no bundled model directory
-
 const MODEL_ID = 'Xenova/slimsam-77-uniform';
-const requestedBackend = new URL(self.location.href).searchParams.get('backend');
-
-if (requestedBackend && !['wasm', 'webgpu'].includes(requestedBackend)) {
-  throw new Error(`Unsupported backend '${requestedBackend}'. Use wasm or webgpu.`);
-}
+let SamModel;
+let AutoProcessor;
+let RawImage;
+let requestedBackend = null;
 
 let model = null;
 let processor = null;
@@ -35,6 +30,22 @@ const stringify = (value) => {
   try { return JSON.stringify(value); } catch { return String(value); }
 };
 const log = (message, data) => post({ type: 'log', message, data });
+
+log('worker module entry');
+
+let transformers;
+async function loadTransformers() {
+  if (transformers) return transformers;
+  try {
+    transformers = await import('@huggingface/transformers');
+    ({ SamModel, AutoProcessor, RawImage } = transformers);
+    transformers.env.allowLocalModels = false;
+    return transformers;
+  } catch (error) {
+    log('transformers import failed', String(error?.message || error));
+    throw error;
+  }
+}
 
 const nativeFetch = self.fetch.bind(self);
 self.fetch = async (...args) => {
@@ -87,6 +98,7 @@ function withTimeout(promise, stage, timeoutMs = 120000) {
 
 async function loadModel() {
   if (model) return backend;
+  await loadTransformers();
   const progress_callback = progressReporter();
   post({ type: 'status', stage: 'phase', phase: 'model-load-started' });
   processor = await withTimeout(AutoProcessor.from_pretrained(MODEL_ID), 'processor load');
@@ -203,6 +215,10 @@ self.addEventListener('message', async (event) => {
   const { type, id, ...rest } = event.data;
   try {
     if (type === 'init') {
+      requestedBackend = new URLSearchParams(rest.search).get('backend');
+      if (requestedBackend && !['wasm', 'webgpu'].includes(requestedBackend)) {
+        throw new Error(`Unsupported backend '${requestedBackend}'. Use wasm or webgpu.`);
+      }
       const device = await load();
       post({ type: 'ready', id, backend: device });
     } else if (type === 'embed') {

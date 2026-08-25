@@ -8,9 +8,7 @@ export class SamSession {
   constructor(opts = {}) {
     this.onStatus = opts.onStatus || (() => {});
     this.onLog = opts.onLog || (() => {});
-    const workerUrl = new URL('./samWorker.js', import.meta.url);
-    workerUrl.search = window.location.search;
-    this.worker = new Worker(workerUrl, { type: 'module' });
+    this.worker = new Worker(new URL('./samWorker.js', import.meta.url), { type: 'module' });
     this.pending = new Map();
     this.nextId = 1;
     this.backend = null;
@@ -80,7 +78,7 @@ export class SamSession {
 
   /** Load the model (downloads on first run) and report the active backend. */
   async init() {
-    if (!this.backend) this.backend = await this._send('init', {});
+    if (!this.backend) this.backend = await this._send('init', { search: window.location.search });
     return this.backend;
   }
 
