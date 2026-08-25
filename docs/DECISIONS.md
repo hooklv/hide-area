@@ -87,3 +87,24 @@ Why this project is built the way it is. Append new entries at the bottom. Do no
 **Decision:** after decode, the downscaled canvas is the only image representation. The original resolution is discarded.
 
 **Why:** one coordinate space for taps, prompts, masks, contours and vertices removes an entire class of conversion bugs. The 2000 px cap bounds memory and inference input size; its physical pixel scale and any effect on measurement accuracy must be confirmed from representative hides and photos.
+
+## 12. WebGPU is gated on adapter storage-buffer limits, not enabled by default on mobile
+
+**Context:** on a real Android device (Chrome 151, Android 10, 8 GB RAM), the app selected WebGPU, ran the vision encoder, and reported success, but the resulting masks were brightness-correlated noise with a high IoU score. The device log showed repeated WebGPU validation errors during embedding:
+
+```
+Binding size (805306368) of [Buffer] is larger than the maximum storage buffer binding size (134217728)
+While validating [BindGroupDescriptor "MatMul"] / "Add" / "Softmax"
+```
+
+The device caps `maxStorageBufferBindingSize` at 128 MB; SlimSAM's vision encoder requests 768 MB. The compute passes failed, embedding still completed, and the corrupted embedding propagated silently through mask selection, contour extraction and area calculation. Desktop has a higher cap, which is why it never reproduced there and why the synthetic browser tests passed throughout.
+
+**Decision:** check `adapter.limits.maxStorageBufferBindingSize` before selecting WebGPU and fall back to WASM when it is insufficient, request the adapter's highest supported limit when creating the device, treat any WebGPU `uncapturederror` or device loss during embedding or decode as a failed operation, and validate the produced mask for plausibility before showing it.
+
+**Why it matters beyond this one device:** the real defect was not the GPU limit, it was that the pipeline reported success on corrupted data. In a measuring tool, a plausible-looking wrong number is worse than a visible failure. Any future change that makes an inference failure non-fatal reintroduces this class of bug.
+
+## 13. Validate mask quality after segmentation
+
+**Decision:** reject a segmentation mask when coverage is below 0.1%, above 90%, or when it has more than 32 components and the largest component contains less than 80% of the foreground.
+
+**Why:** this prevents obviously implausible masks from being converted into an outline and measurement after an inference failure. These thresholds are provisional and tuned against one real photo; further real-photo validation is not yet measured.

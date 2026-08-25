@@ -54,6 +54,19 @@ Report to three significant figures at most, for example 4.12 m². The method do
 
 Industrial photocell machines reach 0.2 to 0.5%. Do not imply this app is in that class.
 
+## Measured performance
+
+Observed on Android 10, Chrome 151, with 8 GB RAM and 8 cores:
+
+| Measure | Result |
+|---|---|
+| Backend | WASM (WebGPU rejected by the capability check) |
+| Model load | 1.1 s with model files already cached |
+| Embedding | 7.1 s per photo |
+| Mask decode | 0.35 s per tap |
+
+First-time model download on a cold device is not included in these figures and is roughly 40 MB. Embedding runs once per photo; mask decode runs on every tap. Other device and network performance figures are not yet measured.
+
 ## Results log
 
 | Date | Test | Device and backend | Expected | Measured | Deviation | Notes |
