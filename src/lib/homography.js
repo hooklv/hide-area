@@ -248,7 +248,7 @@ export function calibrateA4(taps, opts = {}) {
 
   if (target.ambiguity > 0.92) warnings.push('The sheet looks almost square in the photo; check the corners.');
   const sheetPx = Math.max(...sidesPx);
-  if (sheetPx < 150) warnings.push('The sheet is small in frame. Move closer for a more precise scale.');
+  if (sheetPx < 300) warnings.push(`The A4 sheet is only ${Math.round(sheetPx)} px across in the photo. Move closer and keep it larger in frame.`);
 
   return { ok: true, H, quad, target, mmPerPx, sidesMm, maxErrorPct, warnings, error: null };
 }

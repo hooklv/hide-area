@@ -119,9 +119,9 @@ describe('calibrateA4', () => {
     expect(calibrateA4([P(0, 0), P(2, 0), P(2, 2), P(0, 2)]).ok).toBe(false); // corners too close
   });
 
-  it('warns when the sheet is tiny in frame', () => {
-    const cal = calibrateA4([P(0, 0), P(140, 0), P(140, 99), P(0, 99)]);
+  it('warns with the A4 pixel span when the sheet is small in frame', () => {
+    const cal = calibrateA4([P(0, 0), P(299, 0), P(299, 211), P(0, 211)]);
     expect(cal.ok).toBe(true);
-    expect(cal.warnings.join(' ')).toMatch(/small in frame/);
+    expect(cal.warnings.join(' ')).toMatch(/299 px/);
   });
 });
