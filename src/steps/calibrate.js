@@ -42,7 +42,7 @@ export function enter(app) {
     } else {
       const warn = res.warnings.length ? ` ${res.warnings.join(' ')}` : '';
       status.className = res.warnings.length ? 'status warn' : 'status ok';
-      status.textContent = `Scale ${res.mmPerPx.toFixed(3)} mm/px · sheet reprojects to ${Math.round(res.target.width)} × ${Math.round(res.target.height)} mm (error ${res.maxErrorPct.toFixed(2)}%).${warn}`;
+      status.textContent = `Scale ${res.mmPerPx.toFixed(3)} mm/px · sheet reprojects to ${Math.round(res.target.width)} × ${Math.round(res.target.height)} mm.${warn}`;
       next.disabled = false;
     }
     view.render();
