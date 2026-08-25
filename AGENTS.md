@@ -6,9 +6,9 @@ Instructions for AI agents working in this repository. Read this before changing
 
 A client-only web app that measures the surface area of an irregular leather hide from a single photo. The user photographs the hide with an A4 sheet lying flat in the same plane, taps the four corners of the sheet to establish scale, taps the hide to segment it, reviews the outline, and reads the area in m², dm² and sq ft.
 
-Everything runs in the browser. There is no backend, no accounts, no analytics, and no data leaves the device. Keep it that way.
+Everything runs in the browser. The application has no backend, accounts, analytics, or application-level photo upload. Keep it that way. Model assets are resolved by Transformers.js; do not add application network calls beyond that model delivery path.
 
-Primary user: one leather trader on a mid-range Android phone, in a warehouse, over mobile data. Optimise for that, not for desktop.
+Product assumption: one leather trader on a mid-range Android phone, in a warehouse, over mobile data. Optimise for that, not for desktop.
 
 ## Stack
 
@@ -52,28 +52,33 @@ Do not break these without saying so explicitly and updating this file.
 **Image**
 - `loadImageFile()` caps the longest dimension at 2000 px. Every downstream consumer assumes that shared space.
 - Orientation is applied at decode time via `imageOrientation: 'from-image'`. Fallback paths do not normalise orientation in application code.
+- Replacing the photo increments `state.imageId`, clears calibration, segmentation, review and result state, and sets `state.segment.embeddedFor` to `-1` so the next photo is embedded again.
 
 **Calibration**
 - A4 taps may arrive in any order. `orderQuad()` must return a non self intersecting ring starting nearest the image origin. `a4TargetFor()` matches apparent long edges to 297 mm.
 - The 1% calibration tolerance reprojects the same four points used to solve `H`. It is a numerical sanity check, not a measure of physical accuracy. Never present it to the user as an accuracy figure.
 
 **Segmentation**
-- The model loads as `fp32` on both WebGPU and WASM. Reduced precision weights can collapse SAM logits. Changing dtype requires re-running the mask quality check on a real photo, not on a synthetic rectangle.
+- The model loads as `fp32` on both WebGPU and WASM. Keep this dtype unless a real-photo validation demonstrates a replacement preserves mask quality.
 - `post_process_masks` is called with `binarize: false`. The candidate is selected by maximum `iou_score`, then thresholded at `logit > 0` on that selected channel only. Never threshold before selection, never blend candidates, never treat a nonzero postprocessed value as foreground.
 - One embedding per photo, cached in the worker. `state.imageId`, `state.segment.embeddedFor`, worker `embeddings` and worker `inputs` must stay aligned. Adding or removing prompt points must not trigger re-embedding.
 - Decode requests stay serialised through `SamSession.queue`.
 - `maskCache` in `segment.js` is keyed by `state.segment.version`. Any mask mutation must increment that version or the overlay goes stale.
+- `review.js` regenerates the editable polygon when its `fromVersion` differs from `state.segment.version`. Vertex dragging edits only the review polygon; it does not mutate the SAM mask.
 
 **Contour**
 - `maskToPolygon()` keeps the largest 4-connected component, traces the outer boundary only, and discards holes by design.
-- Tracing follows pixel-edge cracks, not pixel centres. Centre-based tracing carries a systematic area underestimate. Do not "simplify" this back to Moore tracing.
+- Tracing follows pixel-edge cracks, not pixel centres. The raw crack-edge ring encloses the foreground component's pixel area; do not replace it with centre-based tracing without validating the area behavior.
 - Simplification targets 100 to 300 vertices. The final area measures the simplified editable polygon, not the raw mask.
 
 **Config**
 - `base: './'` keeps the build portable across static host subpaths.
-- `optimizeDeps.include: ['@huggingface/transformers']` prevents a mid-session Vite reload that discards the user's photo. This was a real bug.
+- `build.target: 'esnext'` permits modern browser output.
+- `server.host: true` allows development-server access from devices on the local network.
+- `optimizeDeps.include: ['@huggingface/transformers']` pre-bundles the inference dependency to avoid development-time dependency churn while a photo is in progress.
 - `worker.format: 'es'` keeps the SAM worker an ES module.
-- `@huggingface/transformers` is pinned exactly to `3.7.6` because the worker calls `processor.reshape_input_points` and `image_processor.add_input_labels` directly. These are not part of the stable public surface and a minor release can silently change prompt point scaling. Do not add a caret.
+- `@huggingface/transformers` is pinned exactly to `3.7.6`. The worker calls `processor.reshape_input_points` and `image_processor.add_input_labels` directly, so do not add a caret or update the package without validating prompt scaling on a real photo.
+- `samWorker.js` sets `env.allowLocalModels = false`; this app does not bundle a local model directory. Its worker URL inherits `window.location.search`, which carries supported inference flags to the worker.
 
 ## Commands
 
@@ -81,16 +86,17 @@ Do not break these without saying so explicitly and updating this file.
 npm install
 npm run dev              # local dev server
 npm run dev -- --host    # reachable from a phone on the same Wi-Fi
-npm test                 # vitest run, 53 tests, about 2 s
+npm test                 # vitest run, currently 53 tests
+npm run test:watch       # Vitest watch mode
 npm run build            # production bundle to dist, under 1 s
 npm run preview          # serve the built bundle
 ```
 
-`npm test && npm run build` is the verification gate. Run both before reporting a task complete, and report the actual output rather than an assumption.
+`npm test && npm run build` is the repository verification gate. Run both before reporting a task complete, and report the actual output rather than an assumption.
 
 ## Debug flags
 
-`?backend=wasm` and `?backend=webgpu` force the inference backend for like-for-like comparison on the same photo. Invalid values throw. Without the parameter the worker tries WebGPU and falls back to WASM.
+`?backend=wasm` and `?backend=webgpu` force the inference backend for like-for-like comparison on the same photo. Invalid values throw. Without the parameter the worker tries WebGPU when `navigator.gpu` is available, then falls back to WASM.
 
 Segmentation diagnostics (logit min/max/mean, selected candidate index, IoU score, thresholded pixel count, prompt coordinates before and after transform) are written to the console under `[SAM decode diagnostics]` and drawn as a canvas overlay.
 
@@ -102,7 +108,7 @@ Segmentation diagnostics (logit min/max/mean, selected candidate index, IoU scor
 - Do not add dependencies to solve something that is thirty lines of plain JS. Homography and contour tracing are deliberately hand written.
 - Do not tune the model, retrain, swap to a larger SAM variant, or add a second model without measuring the download size and phone decode time first.
 - Do not present a computed number to the user with more precision than the method supports. See `docs/ACCURACY.md`.
-- Do not claim a fix works based on a synthetic test image. Segmentation bugs in this project reproduce on real photos and not on generated rectangles.
+- Do not claim a segmentation fix works based only on a synthetic test image. Validate it on a representative real photo as well.
 
 ## When you are unsure
 

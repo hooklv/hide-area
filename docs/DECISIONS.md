@@ -28,27 +28,27 @@ Why this project is built the way it is. Append new entries at the bottom. Do no
 
 **Decision:** single tap to SAM, editable vertices afterwards.
 
-**Why:** manual tracing carries a systematic inward bias of roughly 3 to 5% on a full-screen trace, because the finger hides the edge. Colour thresholding fails whenever hide and floor are similar in tone, which is the common warehouse case. SAM produces a mask from one tap and the edit step keeps a human in the loop.
+**Why:** manual tracing is expected to be error-prone because the finger obscures the edge, and colour thresholding is unsuitable when hide and floor have similar tones. SAM produces a mask from one tap and the edit step keeps a human in the loop. The size of any tracing bias must be established with field measurements rather than inferred from this source tree.
 
-**Cost accepted:** a roughly 40 MB one-time model download and a multi-second embedding step per photo.
+**Cost accepted:** model delivery and an image-embedding step per photo. Download size and timing are operational measurements and must be rechecked on representative phones and networks.
 
 ## 4. SlimSAM over full SAM, Transformers.js over raw onnxruntime-web
 
 **Decision:** `Xenova/slimsam-77-uniform` through Transformers.js.
 
-**Why:** SlimSAM compresses SAM from 637M to 5.5M parameters at comparable quality, which is what makes a phone download acceptable. Transformers.js provides the processor, the WebGPU to WASM fallback and postprocessing without hand-writing the ONNX plumbing.
+**Why:** SlimSAM is selected to keep the model practical for phone delivery, while Transformers.js provides the processor, WebGPU/WASM backend handling, and postprocessing without hand-writing ONNX plumbing. Parameter counts, download size, and quality comparisons are external model measurements and should be recorded with their source when used for a release decision.
 
 ## 5. Plain JS homography, no OpenCV.js
 
 **Decision:** DLT for four point correspondences, written by hand in `src/lib/homography.js`.
 
-**Why:** OpenCV.js is several megabytes to deliver the equivalent of about thirty lines of linear algebra, on top of an already heavy model download. The hand-written version is fully unit tested.
+**Why:** OpenCV.js would add a substantial browser dependency for functionality already implemented in the tested homography/calibration module. This module deliberately includes normalization, matrix operations, point ordering, calibration validation, and local-scale calculation; it is not merely a thirty-line substitute.
 
 ## 6. Crack-following contour tracing, not Moore neighbour tracing
 
 **Decision:** trace the boundary along pixel edges rather than pixel centres.
 
-**Why:** centre-based tracing systematically underestimates area by roughly 0.2 to 0.5%, because it encloses less than the mask's true pixel area. Crack following encloses exactly the mask area. This was a deliberate deviation from the original spec text.
+**Why:** the raw crack-following ring encloses the foreground component's pixel area, which matches the binary-mask representation. Any numerical comparison with centre-based tracing, including the size of its bias, requires a separately recorded measurement. This was a deliberate deviation from the original spec text.
 
 ## 7. Holes are not subtracted
 
@@ -60,17 +60,17 @@ Why this project is built the way it is. Append new entries at the bottom. Do no
 
 ## 8. fp32 weights on both WebGPU and WASM
 
-**Context:** masks came back as brightness-correlated speckle noise at 79 to 83% reported confidence. Reduced precision on WebGPU was the leading hypothesis.
+**Context:** a prior debugging investigation reported brightness-correlated speckle noise and considered reduced WebGPU precision as a possible cause. The source tree alone cannot reproduce or establish that incident.
 
-**Finding:** a forced backend comparison on the same image produced identical logits, candidate and pixel count on WASM and WebGPU once fp32 was pinned. Precision was not the cause. The actual bug was in mask interpretation, see entry 9.
+**Finding:** the prior investigation concluded that a forced backend comparison produced matching logits, candidate selection, and pixel count after fp32 was pinned, and that mask interpretation was the relevant defect. Preserve the conclusion as history, but repeat that comparison on a representative real photo before relying on it for a future dtype change.
 
 **Decision:** keep fp32 pinned on both backends anyway.
 
-**Why:** reduced precision is a known cause of collapsed SAM logits, the measured cost of fp32 on this model is acceptable, and the failure mode it would produce is silent. Any move to a quantized dtype must be re-validated on a real photo.
+**Why:** fp32 is the documented, implemented baseline and avoids introducing a silent mask-quality change without evidence. Any move to a quantized dtype must be measured and validated on a real photo.
 
 ## 9. Explicit candidate selection then threshold, in that order
 
-**Context:** the original code postprocessed first and treated any nonzero numeric value as foreground, which turned weak signed logits into noise shaped like the image brightness gradient.
+**Context:** a prior implementation reportedly postprocessed before selecting a candidate and treated nonzero values as foreground. This decision records the replacement contract; the behavior of the previous implementation is historical context.
 
 **Decision:** call `post_process_masks` with `binarize: false`, select the candidate with the highest `iou_score`, then threshold that single channel at `logit > 0`.
 
@@ -80,10 +80,10 @@ Why this project is built the way it is. Append new entries at the bottom. Do no
 
 **Decision:** `3.7.6` with no caret.
 
-**Why:** the worker calls `processor.reshape_input_points` and `image_processor.add_input_labels` directly instead of routing points through `processor(image, { input_points })`. This avoids re-running image preprocessing on every tap, but it depends on internals that are not part of the stable public API. A minor release could change prompt point scaling silently, and the symptom would be a plausible-looking mask in the wrong place.
+**Why:** the worker calls `processor.reshape_input_points` and `image_processor.add_input_labels` directly instead of routing points through `processor(image, { input_points })`, avoiding image preprocessing on every tap. Treat these calls as version-sensitive integration points: upgrade only after validating prompt coordinates and masks on a real photo.
 
 ## 11. Single downscaled image space, capped at 2000 px
 
 **Decision:** after decode, the downscaled canvas is the only image representation. The original resolution is discarded.
 
-**Why:** one coordinate space for taps, prompts, masks, contours and vertices removes an entire class of conversion bugs. 2000 px on the long side is roughly 3 mm per pixel on a full cowhide, which is below the mask edge error, so the cap costs nothing in accuracy while keeping memory and inference time manageable on a phone.
+**Why:** one coordinate space for taps, prompts, masks, contours and vertices removes an entire class of conversion bugs. The 2000 px cap bounds memory and inference input size; its physical pixel scale and any effect on measurement accuracy must be confirmed from representative hides and photos.
