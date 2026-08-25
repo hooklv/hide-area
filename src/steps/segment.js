@@ -63,10 +63,14 @@ export function enter(app) {
 
   app.onSamStatus = (msg) => {
     if (!isCurrent()) return;
-    if (msg.stage === 'download') {
+    if (msg.stage === 'model-cache' && !msg.hit) {
+      bar.hidden = false;
+      fill.style.width = '0%';
+      setStatus('Downloading the model once, about 40 MB…');
+    } else if (msg.stage === 'download') {
       bar.hidden = false;
       fill.style.width = `${msg.progress}%`;
-      setStatus(`Downloading the model, one time only… ${msg.progress}%`);
+      setStatus(`Downloading the model once, about 40 MB… ${msg.progress}%`);
     } else if (msg.stage === 'load') {
       setStatus(`Starting the model on ${msg.device} (${msg.dtype})…`);
     } else if (msg.stage === 'warning') {
@@ -76,7 +80,7 @@ export function enter(app) {
       setStatus(msg.message, 'bad');
       retry.hidden = false;
     } else if (msg.stage === 'phase') {
-      console.debug('[SAM phase]', msg);
+      if (app.debug.enabled) console.debug('[SAM phase]', msg);
     }
   };
 

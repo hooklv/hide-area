@@ -4,8 +4,9 @@
  */
 
 export class SamSession {
-  /** @param {{onStatus?:(s:{stage:string, progress?:number, device?:string, dtype?:string})=>void,onLog?:(source:string,message:string,data?:unknown)=>void}} [opts] */
+  /** @param {{debug?:boolean,onStatus?:(s:{stage:string, progress?:number, device?:string, dtype?:string})=>void,onLog?:(source:string,message:string,data?:unknown)=>void}} [opts] */
   constructor(opts = {}) {
+    this.debug = opts.debug === true;
     this.onStatus = opts.onStatus || (() => {});
     this.onLog = opts.onLog || (() => {});
     this.worker = new Worker(new URL('./samWorker.js', import.meta.url), { type: 'module' });
@@ -16,7 +17,7 @@ export class SamSession {
     this.startedAt = performance.now();
     this.embedded = null;   // promise for the current photo's embedding
     this.queue = Promise.resolve();
-    console.debug('[SAM phase]', { phase: 'worker-created', ms: 0 });
+    if (this.debug) console.debug('[SAM phase]', { phase: 'worker-created', ms: 0 });
     this.onLog('main', '[SAM phase]', { phase: 'worker-created', ms: 0 });
     this.worker.addEventListener('message', (event) => this._onMessage(event.data));
     this.worker.addEventListener('error', (event) => {
@@ -42,7 +43,7 @@ export class SamSession {
   _onMessage(msg) {
     if (msg.type === 'status') {
       const phase = { ...msg, ms: Math.round(performance.now() - this.startedAt) };
-      console.debug('[SAM phase]', phase);
+      if (this.debug) console.debug('[SAM phase]', phase);
       this.onLog('worker', '[SAM phase]', phase);
       this.onStatus(msg);
       return;
@@ -90,14 +91,14 @@ export class SamSession {
   setImage(imageData) {
     const sourceBytes = imageData.data.byteLength;
     const copy = new Uint8ClampedArray(imageData.data); // detached into the worker
-    console.debug('[SAM phase]', { phase: 'image-transfer', byteLength: copy.byteLength, sourceBytes, sourceDetached: sourceBytes === 0 });
+    if (this.debug) console.debug('[SAM phase]', { phase: 'image-transfer', byteLength: copy.byteLength, sourceBytes, sourceDetached: sourceBytes === 0 });
     this.onLog('main', '[SAM phase]', { phase: 'image-transfer', byteLength: copy.byteLength, sourceBytes, sourceDetached: sourceBytes === 0 });
     this.embedded = this._send(
       'embed',
       { image: { data: copy.buffer, width: imageData.width, height: imageData.height } },
       [copy.buffer],
     ).then((res) => {
-      console.debug('[SAM phase]', { phase: 'embedding-finished', ms: res.ms });
+      if (this.debug) console.debug('[SAM phase]', { phase: 'embedding-finished', ms: res.ms });
       this.backend = res.backend || this.backend;
       return res;
     });

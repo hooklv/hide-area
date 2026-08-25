@@ -19,6 +19,8 @@ let SamModel;
 let AutoProcessor;
 let RawImage;
 let requestedBackend = null;
+let debugEnabled = false;
+let modelCacheMiss = false;
 
 let model = null;
 let processor = null;
@@ -37,7 +39,15 @@ const stringify = (value) => {
   if (typeof value === 'string') return value;
   try { return JSON.stringify(value); } catch { return String(value); }
 };
-const log = (message, data) => post({ type: 'log', message, data });
+const log = (message, data) => {
+  if (debugEnabled) post({ type: 'log', message, data });
+};
+
+function isModelRequest(url) {
+  return typeof url === 'string'
+    && url.startsWith('https://huggingface.co/')
+    && url.includes(`/${MODEL_ID}/resolve/`);
+}
 
 function reportGpuFailure(error) {
   if (gpuFailure) return;
@@ -88,6 +98,11 @@ async function loadTransformers() {
     transformers = await import('@huggingface/transformers');
     ({ SamModel, AutoProcessor, RawImage } = transformers);
     transformers.env.allowLocalModels = false;
+    // Transformers.js stores successful model responses in Cache Storage.
+    transformers.env.useBrowserCache = true;
+    // This must be set before a session is created or Transformers.js falls
+    // back to jsDelivr for its ONNX Runtime sidecar files.
+    transformers.env.backends.onnx.wasm.wasmPaths = new URL(/* @vite-ignore */ './ort/', import.meta.url).href;
     return transformers;
   } catch (error) {
     log('transformers import failed', String(error?.message || error));
@@ -99,6 +114,10 @@ const nativeFetch = self.fetch.bind(self);
 self.fetch = async (...args) => {
   const request = args[0];
   const url = typeof request === 'string' ? request : request?.url;
+  if (!modelCacheMiss && isModelRequest(url)) {
+    modelCacheMiss = true;
+    post({ type: 'status', stage: 'model-cache', hit: false });
+  }
   log('model request started', { url });
   try {
     const response = await nativeFetch(...args);
@@ -127,7 +146,7 @@ function progressReporter() {
       files.set(data.file, Math.min(100, data.progress || 0));
       let sum = 0;
       for (const v of files.values()) sum += v;
-      post({ type: 'status', stage: 'download', progress: Math.round(sum / files.size) });
+      if (modelCacheMiss) post({ type: 'status', stage: 'download', progress: Math.round(sum / files.size) });
       log('model download progress', { file: data.file, progress: Math.round(data.progress || 0) });
     } else if (data.status === 'done' && data.file) {
       files.set(data.file, 100);
@@ -173,6 +192,7 @@ async function loadModel() {
       throwIfGpuFailed();
       backend = options.device;
       dtype = options.dtype;
+      if (!modelCacheMiss) post({ type: 'status', stage: 'model-cache', hit: true });
       post({ type: 'status', stage: 'phase', phase: 'model-load-finished', backend, dtype });
       return backend;
     } catch (err) {
@@ -267,7 +287,7 @@ async function decode(points) {
     log('SAM mask rejected', { ...quality, selectedMaskIndex: best, selectedIouScore: scores[best] });
     throw new Error(`Segmentation failed: ${quality.reason} Retry with another prompt or use WASM.`);
   }
-  console.debug('[SAM decode diagnostics]', debug);
+  if (debugEnabled) console.debug('[SAM decode diagnostics]', debug);
   post({ type: 'status', stage: 'phase', phase: 'decode-finished' });
   return {
     payload: {
@@ -288,6 +308,7 @@ self.addEventListener('message', async (event) => {
   try {
     if (type === 'init') {
       requestedBackend = new URLSearchParams(rest.search).get('backend');
+      debugEnabled = new URLSearchParams(rest.search).get('debug') === '1';
       if (requestedBackend && !['wasm', 'webgpu'].includes(requestedBackend)) {
         throw new Error(`Unsupported backend '${requestedBackend}'. Use wasm or webgpu.`);
       }

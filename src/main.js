@@ -59,6 +59,7 @@ const app = {
   sam() {
     if (!samSession) {
       samSession = new SamSession({
+        debug: debug.enabled,
         onStatus: (msg) => app.onSamStatus?.(msg),
         onLog: (source, message, data) => debug.log(source, message, data),
       });
