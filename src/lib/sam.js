@@ -4,38 +4,76 @@
  */
 
 export class SamSession {
-  /** @param {{onStatus?:(s:{stage:string, progress?:number, device?:string, dtype?:string})=>void}} [opts] */
+  /** @param {{onStatus?:(s:{stage:string, progress?:number, device?:string, dtype?:string})=>void,onLog?:(source:string,message:string,data?:unknown)=>void}} [opts] */
   constructor(opts = {}) {
     this.onStatus = opts.onStatus || (() => {});
+    this.onLog = opts.onLog || (() => {});
     const workerUrl = new URL('./samWorker.js', import.meta.url);
     workerUrl.search = window.location.search;
     this.worker = new Worker(workerUrl, { type: 'module' });
     this.pending = new Map();
     this.nextId = 1;
     this.backend = null;
+    this.closed = false;
+    this.startedAt = performance.now();
     this.embedded = null;   // promise for the current photo's embedding
     this.queue = Promise.resolve();
+    console.debug('[SAM phase]', { phase: 'worker-created', ms: 0 });
+    this.onLog('main', '[SAM phase]', { phase: 'worker-created', ms: 0 });
     this.worker.addEventListener('message', (event) => this._onMessage(event.data));
     this.worker.addEventListener('error', (event) => {
-      for (const { reject } of this.pending.values()) reject(new Error(event.message || 'Worker failed'));
-      this.pending.clear();
+      this._fail(new Error(event.message || 'Worker failed'));
     });
   }
 
+  _fail(error) {
+    if (this.closed) return;
+    this.closed = true;
+    for (const { reject, timeout } of this.pending.values()) {
+      clearTimeout(timeout);
+      reject(error);
+    }
+    this.pending.clear();
+    this.backend = null;
+    this.embedded = null;
+    this.queue = Promise.resolve();
+    this.onLog('main', 'worker failed', String(error?.message || error));
+    this.worker.terminate();
+  }
+
   _onMessage(msg) {
-    if (msg.type === 'status') { this.onStatus(msg); return; }
+    if (msg.type === 'status') {
+      const phase = { ...msg, ms: Math.round(performance.now() - this.startedAt) };
+      console.debug('[SAM phase]', phase);
+      this.onLog('worker', '[SAM phase]', phase);
+      this.onStatus(msg);
+      return;
+    }
+    if (msg.type === 'log') {
+      this.onLog('worker', msg.message, msg.data);
+      return;
+    }
     const entry = this.pending.get(msg.id);
     if (!entry) return;
     this.pending.delete(msg.id);
+    clearTimeout(entry.timeout);
     if (msg.type === 'error') entry.reject(new Error(msg.message));
     else if (msg.type === 'ready') entry.resolve(msg.backend);
     else entry.resolve(msg.payload);
   }
 
   _send(type, body, transfer) {
+    if (this.closed) return Promise.reject(new Error('SAM worker is not available. Retry to create a new session.'));
     const id = this.nextId++;
     return new Promise((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
+      const timeoutMs = type === 'decode' ? 30000 : 120000;
+      const timeout = setTimeout(() => {
+        if (!this.pending.delete(id)) return;
+        const error = new Error(`SAM ${type} timed out after ${Math.round(timeoutMs / 1000)} seconds`);
+        this.onLog('main', 'RPC timeout', { phase: type, waitedMs: timeoutMs });
+        this._fail(error);
+      }, timeoutMs);
+      this.pending.set(id, { resolve, reject, timeout });
       this.worker.postMessage({ type, id, ...body }, transfer || []);
     });
   }
@@ -52,12 +90,16 @@ export class SamSession {
    * @param {ImageData} imageData the downscaled photo
    */
   setImage(imageData) {
+    const sourceBytes = imageData.data.byteLength;
     const copy = new Uint8ClampedArray(imageData.data); // detached into the worker
+    console.debug('[SAM phase]', { phase: 'image-transfer', byteLength: copy.byteLength, sourceBytes, sourceDetached: sourceBytes === 0 });
+    this.onLog('main', '[SAM phase]', { phase: 'image-transfer', byteLength: copy.byteLength, sourceBytes, sourceDetached: sourceBytes === 0 });
     this.embedded = this._send(
       'embed',
       { image: { data: copy.buffer, width: imageData.width, height: imageData.height } },
       [copy.buffer],
     ).then((res) => {
+      console.debug('[SAM phase]', { phase: 'embedding-finished', ms: res.ms });
       this.backend = res.backend || this.backend;
       return res;
     });
@@ -82,7 +124,6 @@ export class SamSession {
   }
 
   terminate() {
-    this.worker.terminate();
-    this.pending.clear();
+    this._fail(new Error('SAM worker was terminated'));
   }
 }

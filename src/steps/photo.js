@@ -18,6 +18,8 @@ export async function loadImageFile(file, maxSide = MAX_SIDE) {
       source = await loadViaElement(file);
     }
   }
+  const decodedWidth = source.width;
+  const decodedHeight = source.height;
   const scale = Math.min(1, maxSide / Math.max(source.width, source.height));
   const width = Math.max(1, Math.round(source.width * scale));
   const height = Math.max(1, Math.round(source.height * scale));
@@ -28,7 +30,7 @@ export async function loadImageFile(file, maxSide = MAX_SIDE) {
   ctx.imageSmoothingQuality = 'high';
   ctx.drawImage(source, 0, 0, width, height);
   source.close?.();
-  return { canvas, imageData: ctx.getImageData(0, 0, width, height), width, height };
+  return { canvas, imageData: ctx.getImageData(0, 0, width, height), width, height, decodedWidth, decodedHeight };
 }
 
 function loadViaElement(file) {

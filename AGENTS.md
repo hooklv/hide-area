@@ -86,7 +86,7 @@ Do not break these without saying so explicitly and updating this file.
 npm install
 npm run dev              # local dev server
 npm run dev -- --host    # reachable from a phone on the same Wi-Fi
-npm test                 # vitest run, currently 53 tests
+npm test                 # vitest run, currently 55 tests
 npm run test:watch       # Vitest watch mode
 npm run build            # production bundle to dist, under 1 s
 npm run preview          # serve the built bundle
@@ -98,7 +98,13 @@ npm run preview          # serve the built bundle
 
 `?backend=wasm` and `?backend=webgpu` force the inference backend for like-for-like comparison on the same photo. Invalid values throw. Without the parameter the worker tries WebGPU when `navigator.gpu` is available, then falls back to WASM.
 
+`?debug=1` enables the on-screen, collapsible diagnostic log for phone-only failures. It records device capabilities, image dimensions, worker phases, model request outcomes, progress, console warnings/errors, and unhandled errors; its Copy all button produces a plain-text report. It must remain absent without the flag.
+
 Segmentation diagnostics (logit min/max/mean, selected candidate index, IoU score, thresholded pixel count, prompt coordinates before and after transform) are written to the console under `[SAM decode diagnostics]` and drawn as a canvas overlay.
+
+## Real-photo fixture
+
+`test/fixtures/a4-on-floor.jpeg` is the canonical real-phone segmentation fixture: it has EXIF `upper-right` orientation, canonical A4 metadata in orientation-normalized decoded space, and must replace generated rectangles in browser reproductions. `load.js` asserts its 3000 x 4000 portrait decode and returns coordinates scaled to the actual runtime image; Vitest verifies geometry and the stored browser-generated mask, while browser automation remains the authoritative real SAM inference check.
 
 ## What not to do
 

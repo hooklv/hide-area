@@ -26,8 +26,40 @@ let dtype = null;
 let inputs = null;      // processor output for the current photo
 let embeddings = null;  // cached image embeddings for the current photo
 let imageSize = null;   // { width, height } in image space
+let loading = null;
 
 const post = (msg, transfer) => self.postMessage(msg, transfer || []);
+const stringify = (value) => {
+  if (value === undefined) return '';
+  if (typeof value === 'string') return value;
+  try { return JSON.stringify(value); } catch { return String(value); }
+};
+const log = (message, data) => post({ type: 'log', message, data });
+
+const nativeFetch = self.fetch.bind(self);
+self.fetch = async (...args) => {
+  const request = args[0];
+  const url = typeof request === 'string' ? request : request?.url;
+  log('model request started', { url });
+  try {
+    const response = await nativeFetch(...args);
+    log('model request completed', { url: response.url || url, status: response.status, ok: response.ok });
+    return response;
+  } catch (error) {
+    log('model request failed', { url, error: String(error?.message || error) });
+    throw error;
+  }
+};
+
+for (const level of ['warn', 'error']) {
+  const original = console[level].bind(console);
+  console[level] = (...args) => {
+    log(`console.${level}`, args.map(stringify).join(' '));
+    original(...args);
+  };
+}
+self.addEventListener('error', (event) => log('worker.onerror', event.message || event.error));
+self.addEventListener('unhandledrejection', (event) => log('worker unhandledrejection', event.reason));
 
 function progressReporter() {
   const files = new Map();
@@ -37,16 +69,27 @@ function progressReporter() {
       let sum = 0;
       for (const v of files.values()) sum += v;
       post({ type: 'status', stage: 'download', progress: Math.round(sum / files.size) });
+      log('model download progress', { file: data.file, progress: Math.round(data.progress || 0) });
     } else if (data.status === 'done' && data.file) {
       files.set(data.file, 100);
+      log('model download complete', { file: data.file });
     }
   };
 }
 
-async function load() {
+function withTimeout(promise, stage, timeoutMs = 120000) {
+  let timeout;
+  const limit = new Promise((_, reject) => {
+    timeout = setTimeout(() => reject(new Error(`SAM ${stage} timed out after ${Math.round(timeoutMs / 1000)} seconds`)), timeoutMs);
+  });
+  return Promise.race([promise, limit]).finally(() => clearTimeout(timeout));
+}
+
+async function loadModel() {
   if (model) return backend;
   const progress_callback = progressReporter();
-  processor = await AutoProcessor.from_pretrained(MODEL_ID);
+  post({ type: 'status', stage: 'phase', phase: 'model-load-started' });
+  processor = await withTimeout(AutoProcessor.from_pretrained(MODEL_ID), 'processor load');
   // Pin WebGPU to fp32: reduced precision model weights can collapse SAM logits.
   const candidates = requestedBackend ? [requestedBackend] : ['webgpu', 'wasm'];
   const attempts = candidates.map((device) => ({ device, dtype: 'fp32' }));
@@ -55,9 +98,10 @@ async function load() {
     if (options.device === 'webgpu' && !('gpu' in navigator)) continue;
     try {
       post({ type: 'status', stage: 'load', device: options.device, dtype: options.dtype });
-      model = await SamModel.from_pretrained(MODEL_ID, { ...options, progress_callback });
+      model = await withTimeout(SamModel.from_pretrained(MODEL_ID, { ...options, progress_callback }), 'model load');
       backend = options.device;
       dtype = options.dtype;
+      post({ type: 'status', stage: 'phase', phase: 'model-load-finished', backend, dtype });
       return backend;
     } catch (err) {
       lastError = err;
@@ -67,18 +111,35 @@ async function load() {
   throw lastError || new Error('No inference backend available');
 }
 
+async function load() {
+  if (model) return backend;
+  if (!loading) {
+    loading = loadModel().catch((error) => {
+      model = null;
+      processor = null;
+      backend = null;
+      throw error;
+    }).finally(() => { loading = null; });
+  }
+  return loading;
+}
+
 async function embed(image) {
   await load();
+  post({ type: 'status', stage: 'phase', phase: 'image-transferred', byteLength: image.data.byteLength, detached: image.data.byteLength === 0 });
+  post({ type: 'status', stage: 'phase', phase: 'embedding-started' });
   const raw = new RawImage(new Uint8ClampedArray(image.data), image.width, image.height, 4).rgb();
   imageSize = { width: image.width, height: image.height };
   inputs = await processor(raw);
   embeddings = await model.get_image_embeddings(inputs);
+  post({ type: 'status', stage: 'phase', phase: 'embedding-finished' });
   return { backend, dtype };
 }
 
 /** @param {{x:number,y:number,label:number}[]} points image space, label 1 = add, 0 = remove */
 async function decode(points) {
   if (!embeddings) throw new Error('Image embedding is not ready');
+  post({ type: 'status', stage: 'phase', phase: 'decode-started' });
   const coords = [points.map((p) => [p.x, p.y])];
   const labels = [points.map((p) => p.label)];
   const input_points = processor.reshape_input_points(coords, inputs.original_sizes, inputs.reshaped_input_sizes);
@@ -123,6 +184,7 @@ async function decode(points) {
     modelLabels: Array.from(input_labels.data, Number),
   };
   console.debug('[SAM decode diagnostics]', debug);
+  post({ type: 'status', stage: 'phase', phase: 'decode-finished' });
   return {
     payload: {
       mask,
@@ -153,6 +215,7 @@ self.addEventListener('message', async (event) => {
       post({ type: 'done', id, payload: { ...payload, ms: Math.round(performance.now() - started) } }, transfer);
     }
   } catch (err) {
+    log('worker request failed', { type, id, error: String(err?.message || err) });
     post({ type: 'error', id, message: String(err?.message || err) });
   }
 });

@@ -1,0 +1,28 @@
+{
+  "image": {
+    "canonicalSpace": "orientation-normalized decoded image pixels, before app downscaling",
+    "width": 3000,
+    "height": 4000,
+    "encodedJpeg": {
+      "width": 4000,
+      "height": 3000,
+      "orientation": "upper-right (EXIF orientation 6)",
+      "cornerCoordinates": [
+        { "corner": "top-left", "x": 1571.99, "y": 1974.07 },
+        { "corner": "top-right", "x": 1567.0, "y": 1032.78 },
+        { "corner": "bottom-right", "x": 2949.15, "y": 999.25 },
+        { "corner": "bottom-left", "x": 2945.69, "y": 1994.7 }
+      ],
+      "note": "Informational only. Do not use these coordinates at runtime."
+    }
+  },
+  "a4Corners": [
+    { "corner": "top-left", "x": 1024.93, "y": 1571.99 },
+    { "corner": "top-right", "x": 1966.22, "y": 1567.0 },
+    { "corner": "bottom-right", "x": 2000.75, "y": 2949.15 },
+    { "corner": "bottom-left", "x": 1005.3, "y": 2945.69 }
+  ],
+  "prompt": { "x": 1500, "y": 2250, "note": "Clearly inside the A4 sheet." },
+  "expectedAreaM2": 0.0623,
+  "source": "Real phone photo of one A4 sheet on a dark textured floor. It reproduces the segmentation bugs and exercises EXIF orientation handling."
+}

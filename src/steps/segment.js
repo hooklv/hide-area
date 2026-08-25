@@ -16,6 +16,7 @@ export function enter(app) {
     <p>Tap on the hide to select it. Switch to Remove and tap anything the mask grabbed by mistake.</p>
     <div class="progress" id="bar" hidden><i style="width:0%"></i></div>
     <p class="status" id="status">Preparing image…</p>
+    <button class="btn wide" id="retry" hidden>Retry model</button>
     <div class="row">
       <div class="toggle" id="mode">
         <button data-label="1" aria-pressed="true">Add area</button>
@@ -32,7 +33,12 @@ export function enter(app) {
   const bar = panel.querySelector('#bar');
   const fill = bar.querySelector('i');
   const next = panel.querySelector('#next');
+  const retry = panel.querySelector('#retry');
   const modeButtons = [...panel.querySelectorAll('#mode button')];
+  const entryImageId = state.imageId;
+  const entryId = (app.segmentEntryId || 0) + 1;
+  app.segmentEntryId = entryId;
+  const isCurrent = () => app.segmentEntryId === entryId && state.step === 3 && state.imageId === entryImageId;
 
   const setStatus = (text, kind = '') => { status.className = `status ${kind}`.trim(); status.textContent = text; };
 
@@ -56,12 +62,15 @@ export function enter(app) {
   next.onclick = () => app.goTo(4);
 
   app.onSamStatus = (msg) => {
+    if (!isCurrent()) return;
     if (msg.stage === 'download') {
       bar.hidden = false;
       fill.style.width = `${msg.progress}%`;
       setStatus(`Downloading the model, one time only… ${msg.progress}%`);
     } else if (msg.stage === 'load') {
       setStatus(`Starting the model on ${msg.device} (${msg.dtype})…`);
+    } else if (msg.stage === 'phase') {
+      console.debug('[SAM phase]', msg);
     }
   };
 
@@ -104,6 +113,7 @@ export function enter(app) {
     setStatus('Segmenting…');
     try {
       const out = await app.sam().decode(points.map((p) => ({ x: p.x, y: p.y, label: p.label })));
+      if (!isCurrent()) return;
       state.segment.mask = { data: out.mask, width: out.width, height: out.height };
       state.segment.debug = out.debug;
       state.segment.version++;
@@ -112,21 +122,33 @@ export function enter(app) {
       setStatus(`Mask updated in ${out.ms} ms · ${state.segment.backend} (${out.dtype}) · confidence ${(out.score * 100).toFixed(0)}%`, 'ok');
       view.render();
     } catch (err) {
+      if (!isCurrent()) return;
       setStatus(String(err.message || err), 'bad');
+      retry.hidden = false;
     } finally {
       busy = false;
       if (queued) { queued = false; run(); }
     }
   }
 
-  (async () => {
+  async function prepare({ resetWorker = false } = {}) {
+    retry.hidden = true;
+    next.disabled = true;
+    state.segment.ready = false;
+    if (resetWorker) {
+      app.resetSam();
+      state.segment.embeddedFor = -1;
+      state.segment.mask = null;
+    }
     try {
       const sam = app.sam();
       state.segment.backend = await sam.init();
+      if (!isCurrent()) return;
       bar.hidden = true;
       if (state.segment.embeddedFor !== state.imageId) {
         setStatus(`Preparing image on ${state.segment.backend}…`);
         const res = await sam.setImage(state.image.imageData);
+        if (!isCurrent()) return;
         state.segment.embeddedFor = state.imageId;
         state.segment.backend = res.backend || state.segment.backend;
         setStatus(`Ready in ${res.ms} ms on ${state.segment.backend}. Tap the hide.`, 'ok');
@@ -137,13 +159,19 @@ export function enter(app) {
       if (state.segment.points.length && !state.segment.mask) run();
       else if (state.segment.mask) next.disabled = false;
     } catch (err) {
-      setStatus(`Model failed to start: ${err.message || err}`, 'bad');
+      if (!isCurrent()) return;
+      setStatus(`Model failed: ${err.message || err}`, 'bad');
+      retry.hidden = false;
     }
-  })();
+  }
+
+  retry.onclick = () => prepare({ resetWorker: true });
+  prepare();
 
   view.render();
 }
 
 export function leave(app) {
+  app.segmentEntryId = (app.segmentEntryId || 0) + 1;
   app.onSamStatus = null;
 }

@@ -7,6 +7,7 @@
  */
 
 import { CanvasView } from './ui/canvasView.js';
+import { DebugLog } from './ui/debug.js';
 import { SamSession } from './lib/sam.js';
 import * as photo from './steps/photo.js';
 import * as calibrate from './steps/calibrate.js';
@@ -32,6 +33,7 @@ const stage = document.getElementById('stage');
 const stepsEl = document.getElementById('steps');
 const panelEl = document.getElementById('panel');
 const emptyEl = document.getElementById('stage-empty');
+const debug = new DebugLog();
 
 const state = initialState();
 const view = new CanvasView({
@@ -45,6 +47,7 @@ let samSession = null;
 const app = {
   state,
   view,
+  debug,
   onSamStatus: null,
 
   setPanel(html) {
@@ -55,12 +58,27 @@ const app = {
 
   sam() {
     if (!samSession) {
-      samSession = new SamSession({ onStatus: (msg) => app.onSamStatus?.(msg) });
+      samSession = new SamSession({
+        onStatus: (msg) => app.onSamStatus?.(msg),
+        onLog: (source, message, data) => debug.log(source, message, data),
+      });
     }
     return samSession;
   },
 
+  resetSam() {
+    samSession?.terminate();
+    samSession = null;
+  },
+
   setImage(image) {
+    debug.log('main', 'image decoded', {
+      decodedWidth: image.decodedWidth,
+      decodedHeight: image.decodedHeight,
+      downscaledWidth: image.width,
+      downscaledHeight: image.height,
+      byteLength: image.imageData.data.byteLength,
+    });
     Object.assign(state, {
       image,
       imageId: state.imageId + 1,
