@@ -13,10 +13,16 @@ import { SamModel, AutoProcessor, RawImage, Tensor, env } from '@huggingface/tra
 env.allowLocalModels = false; // this app has no bundled model directory
 
 const MODEL_ID = 'Xenova/slimsam-77-uniform';
+const requestedBackend = new URL(self.location.href).searchParams.get('backend');
+
+if (requestedBackend && !['wasm', 'webgpu'].includes(requestedBackend)) {
+  throw new Error(`Unsupported backend '${requestedBackend}'. Use wasm or webgpu.`);
+}
 
 let model = null;
 let processor = null;
 let backend = null;
+let dtype = null;
 let inputs = null;      // processor output for the current photo
 let embeddings = null;  // cached image embeddings for the current photo
 let imageSize = null;   // { width, height } in image space
@@ -41,20 +47,17 @@ async function load() {
   if (model) return backend;
   const progress_callback = progressReporter();
   processor = await AutoProcessor.from_pretrained(MODEL_ID);
-  // Try WebGPU first, fall back to WASM transparently. Device defaults decide
-  // the dtype, so we only request weights the model repo actually publishes.
-  const attempts = [
-    { device: 'webgpu' },
-    { device: 'wasm' },
-    { device: 'wasm', dtype: 'q8' },
-  ];
+  // Pin WebGPU to fp32: reduced precision model weights can collapse SAM logits.
+  const candidates = requestedBackend ? [requestedBackend] : ['webgpu', 'wasm'];
+  const attempts = candidates.map((device) => ({ device, dtype: 'fp32' }));
   let lastError = null;
   for (const options of attempts) {
     if (options.device === 'webgpu' && !('gpu' in navigator)) continue;
     try {
-      post({ type: 'status', stage: 'load', device: options.device });
+      post({ type: 'status', stage: 'load', device: options.device, dtype: options.dtype });
       model = await SamModel.from_pretrained(MODEL_ID, { ...options, progress_callback });
       backend = options.device;
+      dtype = options.dtype;
       return backend;
     } catch (err) {
       lastError = err;
@@ -70,7 +73,7 @@ async function embed(image) {
   imageSize = { width: image.width, height: image.height };
   inputs = await processor(raw);
   embeddings = await model.get_image_embeddings(inputs);
-  return { backend };
+  return { backend, dtype };
 }
 
 /** @param {{x:number,y:number,label:number}[]} points image space, label 1 = add, 0 = remove */
@@ -83,7 +86,7 @@ async function decode(points) {
 
   const outputs = await model({ ...embeddings, input_points, input_labels });
   const masks = await processor.post_process_masks(
-    outputs.pred_masks, inputs.original_sizes, inputs.reshaped_input_sizes,
+    outputs.pred_masks, inputs.original_sizes, inputs.reshaped_input_sizes, { binarize: false },
   );
   const tensor = masks[0];
   const [, count, height, width] = tensor.dims;
@@ -94,8 +97,44 @@ async function decode(points) {
   const src = tensor.data;
   const offset = best * height * width;
   const mask = new Uint8Array(height * width);
-  for (let i = 0; i < mask.length; i++) mask[i] = src[offset + i] ? 1 : 0;
-  return { payload: { mask, width, height, score: scores[best] }, transfer: [mask.buffer] };
+  let min = Infinity;
+  let max = -Infinity;
+  let sum = 0;
+  let pixelCount = 0;
+  for (let i = 0; i < mask.length; i++) {
+    const logit = src[offset + i];
+    min = Math.min(min, logit);
+    max = Math.max(max, logit);
+    sum += logit;
+    // SAM mask logits use zero as the foreground boundary.
+    if (logit > 0) { mask[i] = 1; pixelCount++; }
+  }
+  const promptTensor = Array.from(input_points.data);
+  const debug = {
+    rawLogits: { min, max, mean: sum / mask.length },
+    selectedMaskIndex: best,
+    selectedIouScore: scores[best],
+    pixelCount,
+    imageSize,
+    originalSize: inputs.original_sizes[0],
+    reshapedInputSize: inputs.reshaped_input_sizes[0],
+    tappedPoints: points.map(({ x, y, label }) => ({ x, y, label })),
+    modelPoints: promptTensor,
+    modelLabels: Array.from(input_labels.data, Number),
+  };
+  console.debug('[SAM decode diagnostics]', debug);
+  return {
+    payload: {
+      mask,
+      width,
+      height,
+      score: scores[best],
+      backend,
+      dtype,
+      debug,
+    },
+    transfer: [mask.buffer],
+  };
 }
 
 self.addEventListener('message', async (event) => {

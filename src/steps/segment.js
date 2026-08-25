@@ -1,6 +1,6 @@
 /** Step 3: SAM point prompts. The image embedding is computed once per photo. */
 
-import { drawPrompt, maskToCanvas } from '../ui/draw.js';
+import { drawLabel, drawPrompt, maskToCanvas } from '../ui/draw.js';
 
 export const name = 'Segment';
 export const canEnter = (state) => !!state.calibration.result?.ok;
@@ -47,6 +47,7 @@ export function enter(app) {
   panel.querySelector('#reset').onclick = () => {
     state.segment.points = [];
     state.segment.mask = null;
+    state.segment.debug = null;
     state.segment.version++;
     next.disabled = true;
     setStatus('Points cleared. Tap the hide.');
@@ -60,7 +61,7 @@ export function enter(app) {
       fill.style.width = `${msg.progress}%`;
       setStatus(`Downloading the model, one time only… ${msg.progress}%`);
     } else if (msg.stage === 'load') {
-      setStatus(`Starting the model on ${msg.device}…`);
+      setStatus(`Starting the model on ${msg.device} (${msg.dtype})…`);
     }
   };
 
@@ -86,6 +87,11 @@ export function enter(app) {
       ctx.restore();
     }
     seg.points.forEach((p) => drawPrompt(ctx, v.imageToScreen(p), p.label));
+    if (seg.debug) {
+      const { rawLogits, selectedMaskIndex, selectedIouScore, pixelCount } = seg.debug;
+      drawLabel(ctx, { x: 168, y: 18 },
+        `logits ${rawLogits.min.toFixed(3)}..${rawLogits.max.toFixed(3)} avg ${rawLogits.mean.toFixed(3)} | mask ${selectedMaskIndex} IoU ${(selectedIouScore * 100).toFixed(1)}% | ${pixelCount} px`);
+    }
   });
 
   let busy = false;
@@ -99,9 +105,11 @@ export function enter(app) {
     try {
       const out = await app.sam().decode(points.map((p) => ({ x: p.x, y: p.y, label: p.label })));
       state.segment.mask = { data: out.mask, width: out.width, height: out.height };
+      state.segment.debug = out.debug;
       state.segment.version++;
       next.disabled = false;
-      setStatus(`Mask updated in ${out.ms} ms · ${state.segment.backend} · confidence ${(out.score * 100).toFixed(0)}%`, 'ok');
+      state.segment.backend = out.backend || state.segment.backend;
+      setStatus(`Mask updated in ${out.ms} ms · ${state.segment.backend} (${out.dtype}) · confidence ${(out.score * 100).toFixed(0)}%`, 'ok');
       view.render();
     } catch (err) {
       setStatus(String(err.message || err), 'bad');

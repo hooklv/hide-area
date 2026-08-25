@@ -4,10 +4,12 @@
  */
 
 export class SamSession {
-  /** @param {{onStatus?:(s:{stage:string, progress?:number, device?:string})=>void}} [opts] */
+  /** @param {{onStatus?:(s:{stage:string, progress?:number, device?:string, dtype?:string})=>void}} [opts] */
   constructor(opts = {}) {
     this.onStatus = opts.onStatus || (() => {});
-    this.worker = new Worker(new URL('./samWorker.js', import.meta.url), { type: 'module' });
+    const workerUrl = new URL('./samWorker.js', import.meta.url);
+    workerUrl.search = window.location.search;
+    this.worker = new Worker(workerUrl, { type: 'module' });
     this.pending = new Map();
     this.nextId = 1;
     this.backend = null;
@@ -65,7 +67,7 @@ export class SamSession {
   /**
    * Run the mask decoder against the cached embedding.
    * @param {{x:number,y:number,label:number}[]} points image space
-   * @returns {Promise<{mask:Uint8Array,width:number,height:number,score:number,ms:number}>}
+  * @returns {Promise<{mask:Uint8Array,width:number,height:number,score:number,ms:number,debug:object}>}
    */
   decode(points) {
     const run = async () => {
