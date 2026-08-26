@@ -38,6 +38,8 @@ const app = {
   view,
   debug,
   onSamStatus: null,
+  // { imageId, promise } for an embedding started before step 3, or null.
+  embedding: null,
 
   setPanel(html) {
     panelEl.innerHTML = html;
@@ -59,6 +61,23 @@ const app = {
   resetSam() {
     samSession?.terminate();
     samSession = null;
+    app.embedding = null;
+  },
+
+  /**
+   * The embedding takes 7-12 s on a mid-range phone and the four calibration
+   * taps take about as long, so start it as soon as the photo exists and let
+   * the two overlap. Step 3 awaits this promise instead of embedding again.
+   *
+   * No session state is written here: `embeddedFor` stays owned by step 3, so
+   * a re-taken photo simply orphans this promise rather than racing it.
+   */
+  startEmbedding(image) {
+    const sam = app.sam();
+    const imageId = state.imageId;
+    const promise = sam.init().then(() => sam.setImage(image.imageData));
+    promise.catch((error) => debug.log('main', 'early embedding failed', String(error?.message || error)));
+    app.embedding = { imageId, promise };
   },
 
   setImage(image) {
@@ -72,10 +91,12 @@ const app = {
     setImageState(state, image);
     emptyEl.hidden = true;
     view.setImage(image.canvas);
+    app.startEmbedding(image);
   },
 
   reset() {
     resetState(state);
+    app.embedding = null;
     emptyEl.hidden = false;
     view.source = null;
     view.setDrawOverlay(null);

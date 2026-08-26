@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { chooseBackendCandidates, initialBackendRequest, WEBGPU_UNSAFE_KEY } from '../src/lib/samBackend.js';
 import { SamSession } from '../src/lib/sam.js';
 
@@ -37,6 +37,52 @@ class FakeWorker {
 function sessionWith(workerFactory, storage, search = '') {
   return new SamSession({ workerFactory, storage, search });
 }
+
+describe('model download deadline', () => {
+  afterEach(() => vi.useRealTimers());
+
+  it('keeps waiting while download progress arrives, and gives up when it stops', async () => {
+    vi.useFakeTimers();
+    // Never answers the init RPC: the model download is still running.
+    const worker = new FakeWorker(() => {});
+    const session = sessionWith(() => worker, fakeStorage());
+    const init = session.init();
+    let failed = false;
+    init.catch(() => { failed = true; });
+
+    // 40 MB at 300 kB/s is about 133 s, well past the 120 s RPC ceiling.
+    for (let elapsed = 0; elapsed < 180000; elapsed += 10000) {
+      await vi.advanceTimersByTimeAsync(10000);
+      worker.emit({ type: 'status', stage: 'download', progress: elapsed / 2000 });
+    }
+    expect(failed).toBe(false);
+    expect(worker.terminated).toBeUndefined();
+
+    // Progress stops: the connection is dead rather than slow.
+    await vi.advanceTimersByTimeAsync(120000);
+    await expect(init).rejects.toThrow('without progress');
+    expect(worker.terminated).toBe(true);
+  });
+
+  it('does not extend the decode deadline on download progress', async () => {
+    vi.useFakeTimers();
+    const worker = new FakeWorker((message, fakeWorker) => {
+      if (message.type === 'init') fakeWorker.emit({ type: 'ready', id: message.id, backend: 'wasm' });
+      if (message.type === 'embed') fakeWorker.emit({ type: 'done', id: message.id, payload: { backend: 'wasm', ms: 1 } });
+    });
+    const session = sessionWith(() => worker, fakeStorage());
+    await session.init();
+    await session.setImage({ data: new Uint8ClampedArray(4), width: 1, height: 1 });
+    const decoded = session.decode([{ x: 0, y: 0, label: 1 }]);
+    decoded.catch(() => {});
+
+    await vi.advanceTimersByTimeAsync(20000);
+    worker.emit({ type: 'status', stage: 'download', progress: 50 });
+    await vi.advanceTimersByTimeAsync(10001);
+
+    await expect(decoded).rejects.toThrow('SAM decode timed out');
+  });
+});
 
 describe('SAM backend fallback policy', () => {
   it('uses a separate forced-WASM replacement after a WebGPU diagnostic run faults', () => {

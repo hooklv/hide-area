@@ -19,12 +19,29 @@ const BLOCK_PIXELS = 16;
 // What the device actually reported, minus the [object GPUValidationError] wrapper.
 const GPU_ERROR_TEXT = 'Binding size (805306368) of [Buffer] is larger than the maximum storage buffer binding size (134217728)';
 
-/** Three candidate logit planes; only the best one carries a solid 4x4 block. */
-function maskTensor() {
-  const data = new Float32Array(CANDIDATE_COUNT * HEIGHT * WIDTH).fill(-4);
-  const offset = BEST_CANDIDATE * HEIGHT * WIDTH;
-  for (let y = 2; y < 6; y++) for (let x = 2; x < 6; x++) data[offset + y * WIDTH + x] = 5;
-  return { dims: [1, CANDIDATE_COUNT, HEIGHT, WIDTH], data };
+/** One candidate's logit plane; only the best candidate carries a solid 4x4 block. */
+function channelTensor(candidate) {
+  const data = new Float32Array(HEIGHT * WIDTH).fill(-4);
+  if (candidate === BEST_CANDIDATE) {
+    for (let y = 2; y < 6; y++) for (let x = 2; x < 6; x++) data[y * WIDTH + x] = 5;
+  }
+  return { dims: [1, 1, HEIGHT, WIDTH], data };
+}
+
+/**
+ * Stands in for pred_masks. The real Tensor.slice takes a [start, end] range
+ * per dimension and keeps the dimension; the worker uses it to pick one
+ * candidate before post_process_masks ever sees the tensor.
+ */
+function predMasks() {
+  return {
+    dims: [1, 1, CANDIDATE_COUNT, HEIGHT, WIDTH],
+    slice: (...slices) => {
+      const [start, end] = slices[2];
+      if (end - start !== 1) throw new Error('the worker must select exactly one candidate');
+      return { candidate: start };
+    },
+  };
 }
 
 function fakeTransformers() {
@@ -35,7 +52,7 @@ function fakeTransformers() {
     queue: { onSubmittedWorkDone: async () => {} },
   };
   const model = Object.assign(
-    async () => ({ pred_masks: 'pred_masks', iou_scores: { data: [0.1, 0.9, 0.2] } }),
+    async () => ({ pred_masks: predMasks(), iou_scores: { data: [0.1, 0.9, 0.2] } }),
     { get_image_embeddings: async () => ({ image_embeddings: 'image_embeddings' }) },
   );
   const processor = Object.assign(
@@ -46,7 +63,7 @@ function fakeTransformers() {
     {
       reshape_input_points: (points) => ({ data: points.flat(2) }),
       image_processor: { add_input_labels: (labels) => ({ data: labels.flat() }) },
-      post_process_masks: async () => [maskTensor()],
+      post_process_masks: async (selected) => [channelTensor(selected.candidate)],
     },
   );
   const loads = [];

@@ -47,6 +47,7 @@ export class SamSession {
     this.embedded = null;   // promise for the current photo's embedding
     this.imageData = null;
     this.recovery = null;
+    this.initing = null;
     this.queue = Promise.resolve();
     if (this.debug) console.debug('[SAM phase]', { phase: 'worker-created', ms: 0 });
     this.onLog('main', '[SAM phase]', { phase: 'worker-created', ms: 0 });
@@ -81,6 +82,8 @@ export class SamSession {
         storeUnsafeWebGpu(this.storage, msg);
         this.onLog('main', 'WebGPU unsafe marker stored', { key: WEBGPU_UNSAFE_KEY, details: msg.details });
       }
+      // Download progress proves the worker is alive and the link is moving.
+      if (msg.stage === 'download') this._bumpTimeouts();
       const phase = { ...msg, ms: Math.round(performance.now() - this.startedAt) };
       if (this.debug) console.debug('[SAM phase]', phase);
       this.onLog('worker', '[SAM phase]', phase);
@@ -110,27 +113,43 @@ export class SamSession {
     const id = this.nextId++;
     return new Promise((resolve, reject) => {
       const timeoutMs = type === 'decode' ? 30000 : 120000;
-      const timeout = setTimeout(() => {
-        if (!this.pending.delete(id)) return;
-        const error = new Error(`SAM ${type} timed out after ${Math.round(timeoutMs / 1000)} seconds`);
+      const expire = () => {
+        // Leave the entry in place: _fail is what rejects it. Deleting first
+        // terminated the worker while this request hung unsettled forever.
+        if (!this.pending.has(id)) return;
+        const error = new Error(`SAM ${type} timed out after ${Math.round(timeoutMs / 1000)} seconds without progress`);
         this.onLog('main', 'RPC timeout', { phase: type, waitedMs: timeoutMs });
         this._fail(error);
-      }, timeoutMs);
-      this.pending.set(id, { id, resolve, reject, timeout, type, body });
+      };
+      const timeout = setTimeout(expire, timeoutMs);
+      this.pending.set(id, { id, resolve, reject, timeout, type, body, timeoutMs, expire });
       this.worker.postMessage({ type, id, ...body }, transfer || []);
     });
   }
 
+  /** Restart the deadline on requests that are waiting for the model download. */
+  _bumpTimeouts() {
+    for (const entry of this.pending.values()) {
+      // The decode deadline guards a different failure mode; leave it alone.
+      if (entry.type === 'decode') continue;
+      clearTimeout(entry.timeout);
+      entry.timeout = setTimeout(entry.expire, entry.timeoutMs);
+    }
+  }
+
   /** Load the model (downloads on first run) and report the active backend. */
   async init() {
-    if (!this.backend) {
+    if (this.backend) return this.backend;
+    // The early embedding and step 3 both call this; one init RPC serves both.
+    if (!this.initing) {
       const { forcedWebGpu, unsafeWebGpu } = initialBackendRequest(this.search, getUnsafeWebGpu(this.storage));
       if (forcedWebGpu) clearUnsafeWebGpu(this.storage);
-      this.backend = await this._send('init', {
+      this.initing = this._send('init', {
         search: this.search,
         unsafeWebGpu,
-      });
+      }).finally(() => { this.initing = null; });
     }
+    this.backend = await this.initing;
     return this.backend;
   }
 
@@ -142,18 +161,17 @@ export class SamSession {
   setImage(imageData) {
     this.imageData = imageData;
     const sourceBytes = imageData.data.byteLength;
-    const copy = new Uint8ClampedArray(imageData.data); // detached into the worker
-    if (this.debug) console.debug('[SAM phase]', { phase: 'image-transfer', byteLength: copy.byteLength, sourceBytes, sourceDetached: sourceBytes === 0 });
-    this.onLog('main', '[SAM phase]', { phase: 'image-transfer', byteLength: copy.byteLength, sourceBytes, sourceDetached: sourceBytes === 0 });
-    this.embedded = this._send(
-      'embed',
-      { image: { data: copy.buffer, width: imageData.width, height: imageData.height } },
-      [copy.buffer],
-    ).then((res) => {
+    const phase = { phase: 'image-transfer', byteLength: sourceBytes, sourceBytes, sourceDetached: sourceBytes === 0 };
+    if (this.debug) console.debug('[SAM phase]', phase);
+    this.onLog('main', '[SAM phase]', phase);
+    // Serialised: a re-taken photo must queue behind the embedding it replaces
+    // rather than interleave with it over the worker's single `inputs` slot.
+    const run = () => this._sendImage(imageData).then((res) => {
       if (this.debug) console.debug('[SAM phase]', { phase: 'embedding-finished', ms: res.ms });
-      this.backend = res.backend || this.backend;
       return res;
     });
+    this.embedded = this.queue.then(run, run);
+    this.queue = this.embedded.catch(() => {});
     return this.embedded;
   }
 

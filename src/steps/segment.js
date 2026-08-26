@@ -1,6 +1,7 @@
 /** Step 3: SAM point prompts. The image embedding is computed once per photo. */
 
 import { drawLabel, drawPrompt, formatConfidence, maskToCanvas } from '../ui/draw.js';
+import { fragmentationWarning } from '../lib/maskQuality.js';
 import { maskCacheKey } from '../lib/session.js';
 
 export const name = 'Segment';
@@ -138,7 +139,11 @@ export function enter(app) {
       next.disabled = false;
       state.segment.backend = out.backend || state.segment.backend;
       const fallback = out.fallbackReason ? ` ${FALLBACK_NOTE}` : '';
-      setStatus(`Mask updated in ${out.ms} ms · ${state.segment.backend} (${out.dtype}) · confidence ${formatConfidence(out.score)}.${fallback}`, fallback ? 'warn' : 'ok');
+      // A split mask costs measured area, so it is loud even though it is not a failure.
+      const split = fragmentationWarning(out.debug?.quality, state.calibration.result?.mmPerPx);
+      const measurement = `Mask updated in ${out.ms} ms · ${state.segment.backend} (${out.dtype}) · confidence ${formatConfidence(out.score)}.`;
+      if (split) setStatus(`${split} ${measurement}${fallback}`, 'bad');
+      else setStatus(`${measurement}${fallback}`, fallback ? 'warn' : 'ok');
       view.render();
     } catch (err) {
       if (!isCurrent()) return;
@@ -167,7 +172,8 @@ export function enter(app) {
       bar.hidden = true;
       if (state.segment.embeddedFor !== state.imageId) {
         setStatus(`Preparing image on ${state.segment.backend}…`);
-        const res = await sam.setImage(state.image.imageData);
+        const started = app.embedding?.imageId === state.imageId ? app.embedding.promise : null;
+        const res = await (started || sam.setImage(state.image.imageData));
         if (!isCurrent()) return;
         state.segment.embeddedFor = state.imageId;
         state.segment.backend = res.backend || state.segment.backend;

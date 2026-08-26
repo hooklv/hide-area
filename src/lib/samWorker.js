@@ -10,12 +10,17 @@
 
 import { assessMaskQuality } from './maskQuality.js';
 import { chooseBackendCandidates } from './samBackend.js';
+import { withStallTimeout } from './stallTimeout.js';
 
 const MODEL_ID = 'Xenova/slimsam-77-uniform';
 // The SlimSAM vision encoder requested this binding size on a real Android
 // device (WebGPU validation error: Binding size 805306368); keep this in sync
 // with a measured model requirement rather than assuming a generic GPU limit.
 const REQUIRED_STORAGE_BUFFER_BYTES = 805306368;
+// The model download is guarded against silence, not slowness: a link that
+// delivers nothing for a full minute has stalled, while a slow but healthy one
+// keeps emitting progress the whole way down.
+const MODEL_STALL_MS = 60000;
 let SamModel;
 let AutoProcessor;
 let RawImage;
@@ -37,6 +42,7 @@ let unsafeWebGpu = null;
 let forceWasm = false;
 let ortWebGpuDevice = null;
 let loadingBackend = null;
+let modelLoadProgress = null;
 // Why WebGPU is not the active backend, reported to the user by segment.js.
 let fallbackReason = null;
 let webgpuCapabilityReason = null;
@@ -181,12 +187,14 @@ function progressReporter() {
   const files = new Map();
   return (data) => {
     if (data.status === 'progress' && data.file) {
+      modelLoadProgress?.();
       files.set(data.file, Math.min(100, data.progress || 0));
       let sum = 0;
       for (const v of files.values()) sum += v;
       if (modelCacheMiss) post({ type: 'status', stage: 'download', progress: Math.round(sum / files.size) });
       log('model download progress', { file: data.file, progress: Math.round(data.progress || 0) });
     } else if (data.status === 'done' && data.file) {
+      modelLoadProgress?.();
       files.set(data.file, 100);
       log('model download complete', { file: data.file });
     }
@@ -227,7 +235,11 @@ async function loadModel() {
     try {
       post({ type: 'status', stage: 'load', device: options.device, dtype: options.dtype });
       loadingBackend = device;
-      model = await withTimeout(SamModel.from_pretrained(MODEL_ID, { ...options, progress_callback }), 'model load');
+      const loadingModel = withStallTimeout(
+        SamModel.from_pretrained(MODEL_ID, { ...options, progress_callback }), 'model load', MODEL_STALL_MS,
+      );
+      modelLoadProgress = loadingModel.bump;
+      model = await loadingModel.result;
       backend = options.device;
       dtype = options.dtype;
       fallbackReason = backend === 'webgpu' ? null : webgpuUnavailableReason();
@@ -242,6 +254,7 @@ async function loadModel() {
       if (device === 'webgpu') throw gpuFault(err);
     } finally {
       loadingBackend = null;
+      modelLoadProgress = null;
     }
   }
   throw lastError || new Error('No inference backend available');
@@ -297,17 +310,25 @@ async function decode(points) {
   } catch (error) {
     throw backend === 'webgpu' ? gpuFault(error) : error;
   }
-  const masks = await processor.post_process_masks(
-    outputs.pred_masks, inputs.original_sizes, inputs.reshaped_input_sizes, { binarize: false },
-  );
-  const tensor = masks[0];
-  const [, count, height, width] = tensor.dims;
+  // Select the candidate before postprocessing, not after. iou_scores is
+  // available here, and post_process_masks interpolates every channel it is
+  // given to 1024^2 and then to full image size; two of the three would be
+  // thrown away immediately. Bilinear interpolation is per-channel, so slicing
+  // first is arithmetically identical (test/mask-slicing.test.js proves it on
+  // the installed library) and keeps DECISIONS 9's order: select, then threshold.
   const scores = outputs.iou_scores.data;
   let best = 0;
-  for (let i = 1; i < count; i++) if (scores[i] > scores[best]) best = i;
+  for (let i = 1; i < scores.length; i++) if (scores[i] > scores[best]) best = i;
+  const selected = outputs.pred_masks.slice(null, null, [best, best + 1]);
+
+  const masks = await processor.post_process_masks(
+    selected, inputs.original_sizes, inputs.reshaped_input_sizes, { binarize: false },
+  );
+  const tensor = masks[0];
+  const [, , height, width] = tensor.dims;
 
   const src = tensor.data;
-  const offset = best * height * width;
+  const offset = 0;
   const mask = new Uint8Array(height * width);
   let min = Infinity;
   let max = -Infinity;

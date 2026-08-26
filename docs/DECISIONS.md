@@ -103,11 +103,19 @@ The device caps `maxStorageBufferBindingSize` at 128 MB; SlimSAM's vision encode
 
 **Why it matters beyond this one device:** the real defect was not the GPU limit, it was that the pipeline reported success on corrupted data. In a measuring tool, a plausible-looking wrong number is worse than a visible failure. Any future change that makes an inference failure non-fatal reintroduces this class of bug.
 
-## 13. Validate mask quality after segmentation
+## 13. Validate mask quality after segmentation, and warn about a split mask
 
-**Decision:** reject a segmentation mask when coverage is below 0.1%, above 90%, or when it has more than 32 components and the largest component contains less than 80% of the foreground.
+**Context:** the original rule was a single conjunction: reject when the mask has more than 32 components *and* its largest holds under 80% of the foreground. That can only catch scatter. It cannot catch the failure that actually costs area, which is an object cleanly split into two or three pieces by a shadow. Such a mask passes the gate, and `maskToPolygon()` then keeps the largest component and discards the rest with no signal to the operator.
 
-**Why:** this prevents obviously implausible masks from being converted into an outline and measurement after an inference failure. These thresholds are provisional and tuned against one real photo; further real-photo validation is not yet measured.
+**Decision:** two separate rules, doing two different jobs.
+
+*Reject* when coverage is below 0.1% or above 90%, or when the mask has more than 32 components and its largest holds under 80% of the foreground. Both are unchanged. The coverage range is the backstop that caught a corrupted WebGPU embedding on a real device and stopped a wrong number reaching the screen; do not weaken it.
+
+*Warn, and continue*, whenever the largest component holds under 95% of the foreground, independent of component count. The warning states how much area is being discarded, in dm² wherever the calibration is available, because only the operator can judge whether the missing piece matters.
+
+**Why the component count stays on the rejection but not the warning:** the two signals answer different questions. For the warning, the count is irrelevant and actively harmful: a hide split in two by a shadow has a count of 2 and loses 15% of its area, and the old conjunction saw nothing. For the rejection, the count earns its place, because share alone cannot separate noise from a genuine split. A mask in 40 pieces whose largest holds 99% is a clean object with dust on it; a mask in 40 pieces whose largest holds 5% is a failed inference. Dropping the count there would either lose the noise rejection that DECISIONS 12 exists to provide, or demote it to a warning and let a plausible-looking wrong number reach the screen.
+
+**Still not measured:** every threshold here, the new 95% included, is tuned against flat paper on a floor and against one real photo. None has been validated on real hide, where shadows, curled edges and background similarity are the conditions that produce splits in the first place. Treat the numbers as provisional and revisit them with hide in front of you.
 
 ## 14. Lint for undeclared identifiers, and test the worker module itself
 
@@ -146,3 +154,42 @@ contract, which is what broke.
 unfixed code before the fix landed: lint reported `'fallbackReason' is not defined` at
 `samWorker.js:255`, and all four new tests failed, three reproducing
 `fallbackReason is not defined` and one reproducing `[object GPUValidationError]`.
+
+## 15. Deadlines measure silence, work starts early, and one mask channel is postprocessed
+
+Three changes with one thing in common: they are about the target user, a
+trader on a mid-range Android phone in a warehouse on mobile data.
+
+**Model download deadline.** Two fixed 120-second ceilings guarded a roughly
+40 MB download. At 300 kB/s, a healthy mobile connection needs about 133
+seconds, so the ceiling killed working downloads mid-progress and threw away
+whatever Transformers.js had not yet committed to Cache Storage; the retry then
+re-fetched most of it. The deadline is now reset by every progress event, in
+the worker (`withStallTimeout`, 60 s) and on the main thread (the RPC deadline,
+restarted whenever a download-progress status arrives). 60 seconds of complete
+silence is the stall window: a slow link emits progress continuously, and a
+mobile handover or retransmit storm recovers well inside a minute, so nothing
+healthy trips it. A connection that is dead rather than slow emits nothing, so
+it fails after the window with a stall error and the Retry button, instead of
+after a fixed two minutes. The decode deadline is untouched: a slow decode is a
+different failure with no progress signal to wait on.
+
+**Embedding starts with the photo.** The embedding took 7 to 12 seconds on the
+tested device and began only when the operator reached step 3, while the four
+calibration taps that precede it take about as long. It now starts from
+`app.setImage`, so the two overlap. The lifecycle bookkeeping in
+`session.js` is deliberately untouched: the early embedding writes no session
+state, so a re-taken photo orphans the in-flight promise rather than racing it,
+and `embeddedFor` stays owned by step 3. `SamSession.setImage` now queues
+behind the previous embedding for the same reason, so two embeds cannot
+interleave over the worker's single `inputs` slot.
+
+**One mask channel through postprocessing.** `post_process_masks` bilinearly
+interpolated all three candidates to 1024² and then to full image size before
+one was selected and two discarded. `iou_scores` is available before
+postprocessing, so the winning channel is now sliced out of `pred_masks` first.
+Bilinear interpolation is per-channel, so this is arithmetically identical
+rather than approximately so, and `test/mask-slicing.test.js` proves it against
+the installed 3.7.6 by running both orders and comparing. It also tightens
+DECISIONS 9 rather than bending it: candidate selection now happens strictly
+before any postprocessing, and thresholding still happens last.
