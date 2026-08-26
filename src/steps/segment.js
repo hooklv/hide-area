@@ -79,7 +79,7 @@ export function enter(app) {
     } else if (msg.stage === 'load') {
       setStatus(`Starting the model on ${msg.device} (${msg.dtype})…`);
     } else if (msg.stage === 'warning') {
-      setStatus(msg.message, 'warn');
+      setStatus(msg.message, 'bad');
     } else if (msg.stage === 'backend-fallback') {
       setStatus(FALLBACK_NOTE, 'warn');
     } else if (msg.stage === 'error') {
@@ -171,8 +171,11 @@ export function enter(app) {
         if (!isCurrent()) return;
         state.segment.embeddedFor = state.imageId;
         state.segment.backend = res.backend || state.segment.backend;
-        const fallback = res.fallbackReason ? ` ${FALLBACK_NOTE}` : '';
-        setStatus(`Ready in ${res.ms} ms on ${state.segment.backend}.${fallback} Tap the hide.`, fallback ? 'warn' : 'ok');
+        // The note already names the backend, so it replaces "on wasm".
+        const status = res.fallbackReason
+          ? `Ready in ${res.ms} ms. ${FALLBACK_NOTE} Tap the hide.`
+          : `Ready in ${res.ms} ms on ${state.segment.backend}. Tap the hide.`;
+        setStatus(status, res.fallbackReason ? 'warn' : 'ok');
       } else {
         setStatus(`Ready on ${state.segment.backend}. Tap the hide.`, 'ok');
       }
