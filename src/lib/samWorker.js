@@ -103,10 +103,15 @@ async function getWebGpu() {
   const details = { requiredStorageBufferBytes: REQUIRED_STORAGE_BUFFER_BYTES, availableStorageBufferBytes: available };
   if (!supported) {
     const reason = `maxStorageBufferBindingSize ${available} is below the ${REQUIRED_STORAGE_BUFFER_BYTES} bytes required by SlimSAM`;
-    log('WebGPU capability insufficient', { ...details, reason, forced: requestedBackend === 'webgpu' });
-    post({ type: 'status', stage: 'warning', message: `WebGPU unavailable: ${reason}` });
-    if (requestedBackend !== 'webgpu') {
+    if (requestedBackend === 'webgpu') {
+      // ?backend=webgpu is a diagnostic override: say so rather than
+      // reporting the device as unsupported and then loading WebGPU anyway.
+      log('WebGPU capability check failed, overridden by ?backend=webgpu', { ...details, reason });
+      post({ type: 'status', stage: 'warning', message: `WebGPU failed its capability check (${reason}), but ?backend=webgpu is loading it anyway for diagnosis.` });
+    } else {
       webgpuCapabilityReason = reason;
+      log('WebGPU capability insufficient, falling back to WASM', { ...details, reason });
+      post({ type: 'status', stage: 'warning', message: `WebGPU unavailable: ${reason}` });
       return { supported, reason, ...details };
     }
   }

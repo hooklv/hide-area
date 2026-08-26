@@ -166,4 +166,22 @@ describe('SAM worker GPU fault reporting', () => {
     expect(fallback.details.reason).toBe(GPU_ERROR_TEXT);
     expect(fallback.persist).toBe(true);
   });
+
+  it('says the capability check is being overridden when ?backend=webgpu forces it', async () => {
+    const transformers = fakeTransformers();
+    const { posted, send } = await startWorker({
+      transformers,
+      // The Android device from DECISIONS 12: 128 MB against the 768 MB SlimSAM wants.
+      gpu: { requestAdapter: async () => ({ limits: { maxStorageBufferBindingSize: 134217728 } }) },
+    });
+
+    await send({ type: 'init', id: 1, search: '?backend=webgpu' });
+
+    const warning = posted.find((message) => message.type === 'status' && message.stage === 'warning');
+    expect(warning.message).toContain('?backend=webgpu is loading it anyway for diagnosis');
+    expect(warning.message).not.toMatch(/^WebGPU unavailable/);
+    // The override still loads WebGPU: the wording changed, the behaviour did not.
+    expect(transformers.loads.map((options) => options.device)).toEqual(['webgpu']);
+    expect(posted.find((message) => message.type === 'ready').backend).toBe('webgpu');
+  });
 });

@@ -1,5 +1,14 @@
 /** Small canvas helpers shared by the steps. All arguments are screen space (CSS px). */
 
+/**
+ * The model's iou_score is an unbounded regression output, so it can exceed 1.
+ * A measuring instrument must never show a confidence above 100%.
+ */
+export function formatConfidence(score, digits = 0) {
+  const percent = Math.min(100, Math.max(0, Number(score) * 100));
+  return `${percent.toFixed(digits)}%`;
+}
+
 export function strokePolygon(ctx, points, { close = true, color = '#72e08a', width = 2, fill = null, dash = null } = {}) {
   if (points.length < 2) return;
   ctx.save();

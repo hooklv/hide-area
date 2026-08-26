@@ -1,6 +1,6 @@
 /** Step 3: SAM point prompts. The image embedding is computed once per photo. */
 
-import { drawLabel, drawPrompt, maskToCanvas } from '../ui/draw.js';
+import { drawLabel, drawPrompt, formatConfidence, maskToCanvas } from '../ui/draw.js';
 import { maskCacheKey } from '../lib/session.js';
 
 export const name = 'Segment';
@@ -9,6 +9,10 @@ export const canEnter = (state) => !!state.calibration.result?.ok;
 // Rebuilding the tinted mask bitmap costs a full-image ImageData pass, so it is
 // cached against the image and mask version and reused across pan/zoom frames.
 const maskCache = { key: null, canvas: null };
+
+// The full WebGPU fault text fills the panel and is already kept in the debug
+// log and the persisted marker. The status line gets the short form.
+const FALLBACK_NOTE = 'Running on WASM (WebGPU unsupported on this device).';
 
 export function enter(app) {
   const { state, view } = app;
@@ -75,9 +79,9 @@ export function enter(app) {
     } else if (msg.stage === 'load') {
       setStatus(`Starting the model on ${msg.device} (${msg.dtype})…`);
     } else if (msg.stage === 'warning') {
-      setStatus(msg.message, 'bad');
+      setStatus(msg.message, 'warn');
     } else if (msg.stage === 'backend-fallback') {
-      setStatus(`${msg.message} Continuing on WASM.`, 'bad');
+      setStatus(FALLBACK_NOTE, 'warn');
     } else if (msg.stage === 'error') {
       state.segment.ready = false;
       setStatus(msg.message, 'bad');
@@ -113,7 +117,7 @@ export function enter(app) {
     if (seg.debug) {
       const { rawLogits, selectedMaskIndex, selectedIouScore, pixelCount } = seg.debug;
       drawLabel(ctx, { x: 168, y: 18 },
-        `logits ${rawLogits.min.toFixed(3)}..${rawLogits.max.toFixed(3)} avg ${rawLogits.mean.toFixed(3)} | mask ${selectedMaskIndex} IoU ${(selectedIouScore * 100).toFixed(1)}% | ${pixelCount} px`);
+        `logits ${rawLogits.min.toFixed(3)}..${rawLogits.max.toFixed(3)} avg ${rawLogits.mean.toFixed(3)} | mask ${selectedMaskIndex} IoU ${formatConfidence(selectedIouScore, 1)} | ${pixelCount} px`);
     }
   });
 
@@ -133,8 +137,8 @@ export function enter(app) {
       state.segment.version++;
       next.disabled = false;
       state.segment.backend = out.backend || state.segment.backend;
-      const fallback = out.fallbackReason ? ` WebGPU failed: ${out.fallbackReason}.` : '';
-      setStatus(`Mask updated in ${out.ms} ms · ${state.segment.backend} (${out.dtype}) · confidence ${(out.score * 100).toFixed(0)}%.${fallback}`, fallback ? 'bad' : 'ok');
+      const fallback = out.fallbackReason ? ` ${FALLBACK_NOTE}` : '';
+      setStatus(`Mask updated in ${out.ms} ms · ${state.segment.backend} (${out.dtype}) · confidence ${formatConfidence(out.score)}.${fallback}`, fallback ? 'warn' : 'ok');
       view.render();
     } catch (err) {
       if (!isCurrent()) return;
@@ -167,8 +171,8 @@ export function enter(app) {
         if (!isCurrent()) return;
         state.segment.embeddedFor = state.imageId;
         state.segment.backend = res.backend || state.segment.backend;
-        const fallback = res.fallbackReason ? ` WebGPU failed: ${res.fallbackReason}.` : '';
-        setStatus(`Ready in ${res.ms} ms on ${state.segment.backend}.${fallback} Tap the hide.`, fallback ? 'bad' : 'ok');
+        const fallback = res.fallbackReason ? ` ${FALLBACK_NOTE}` : '';
+        setStatus(`Ready in ${res.ms} ms on ${state.segment.backend}.${fallback} Tap the hide.`, fallback ? 'warn' : 'ok');
       } else {
         setStatus(`Ready on ${state.segment.backend}. Tap the hide.`, 'ok');
       }

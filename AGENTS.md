@@ -86,7 +86,7 @@ Do not break these without saying so explicitly and updating this file.
 npm install
 npm run dev              # local dev server
 npm run dev -- --host    # reachable from a phone on the same Wi-Fi
-npm test                 # vitest run, currently 71 tests
+npm test                 # vitest run, currently 75 tests
 npm run test:watch       # Vitest watch mode
 npm run build            # production bundle to dist, under 1 s
 npm run check:bundle     # build and reject unresolved bare imports in emitted JavaScript
