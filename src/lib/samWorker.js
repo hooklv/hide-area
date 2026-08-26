@@ -37,11 +37,22 @@ let unsafeWebGpu = null;
 let forceWasm = false;
 let ortWebGpuDevice = null;
 let loadingBackend = null;
+// Why WebGPU is not the active backend, reported to the user by segment.js.
+let fallbackReason = null;
+let webgpuCapabilityReason = null;
 
 const post = (msg, transfer) => self.postMessage(msg, transfer || []);
+// A GPUValidationError is not an Error subclass and stringifies to
+// '[object GPUValidationError]'; the useful text is on .message.
+const errorMessage = (value) => {
+  if (value instanceof Error) return value.message;
+  if (value && typeof value.message === 'string' && value.message) return value.message;
+  return String(value);
+};
 const stringify = (value) => {
   if (value === undefined) return '';
   if (typeof value === 'string') return value;
+  if (value && typeof value.message === 'string' && value.message) return errorMessage(value);
   try { return JSON.stringify(value); } catch { return String(value); }
 };
 const log = (message, data) => {
@@ -56,12 +67,12 @@ function isModelRequest(url) {
 
 function reportGpuFailure(error) {
   if (gpuFailure) return;
-  gpuFailure = error instanceof Error ? error : new Error(String(error));
+  gpuFailure = error instanceof Error ? error : new Error(errorMessage(error));
   log('WebGPU failure detected', { message: gpuFailure.message, limits: webgpu });
 }
 
 function gpuFault(error) {
-  const cause = error instanceof Error ? error : new Error(String(error));
+  const cause = error instanceof Error ? error : new Error(errorMessage(error));
   cause.isGpuFault = true;
   return cause;
 }
@@ -70,11 +81,15 @@ function throwIfGpuFailed() {
   if (backend === 'webgpu' && gpuFailure) throw gpuFault(gpuFailure);
 }
 
+function webgpuUnavailableReason() {
+  return gpuFailure?.message || unsafeWebGpu?.reason || webgpuCapabilityReason || null;
+}
+
 function fallbackDetails() {
   return {
     requiredStorageBufferBytes: webgpu?.requiredStorageBufferBytes,
     availableStorageBufferBytes: webgpu?.availableStorageBufferBytes,
-    reason: gpuFailure?.message || unsafeWebGpu?.reason || 'WebGPU was previously marked unsafe',
+    reason: webgpuUnavailableReason() || 'WebGPU was previously marked unsafe',
   };
 }
 
@@ -90,7 +105,10 @@ async function getWebGpu() {
     const reason = `maxStorageBufferBindingSize ${available} is below the ${REQUIRED_STORAGE_BUFFER_BYTES} bytes required by SlimSAM`;
     log('WebGPU capability insufficient', { ...details, reason, forced: requestedBackend === 'webgpu' });
     post({ type: 'status', stage: 'warning', message: `WebGPU unavailable: ${reason}` });
-    if (requestedBackend !== 'webgpu') return { supported, reason, ...details };
+    if (requestedBackend !== 'webgpu') {
+      webgpuCapabilityReason = reason;
+      return { supported, reason, ...details };
+    }
   }
   webgpu = { supported, ...details };
   log('WebGPU capability checked', { ...details, forced: requestedBackend === 'webgpu' });
@@ -207,6 +225,7 @@ async function loadModel() {
       model = await withTimeout(SamModel.from_pretrained(MODEL_ID, { ...options, progress_callback }), 'model load');
       backend = options.device;
       dtype = options.dtype;
+      fallbackReason = backend === 'webgpu' ? null : webgpuUnavailableReason();
       if (backend === 'webgpu') await watchOrtWebGpuDevice();
       throwIfGpuFailed();
       if (!modelCacheMiss) post({ type: 'status', stage: 'model-cache', hit: true });
@@ -326,6 +345,7 @@ async function decode(points) {
       score: scores[best],
       backend,
       dtype,
+      fallbackReason,
       debug,
     },
     transfer: [mask.buffer],

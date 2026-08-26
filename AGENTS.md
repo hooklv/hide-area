@@ -86,14 +86,15 @@ Do not break these without saying so explicitly and updating this file.
 npm install
 npm run dev              # local dev server
 npm run dev -- --host    # reachable from a phone on the same Wi-Fi
-npm test                 # vitest run, currently 55 tests
+npm test                 # vitest run, currently 71 tests
 npm run test:watch       # Vitest watch mode
 npm run build            # production bundle to dist, under 1 s
 npm run check:bundle     # build and reject unresolved bare imports in emitted JavaScript
+npm run lint             # eslint, no-undef and no-unused-vars only
 npm run preview          # serve the built bundle
 ```
 
-`npm test && npm run check:bundle` is the repository verification gate. Run both before reporting a task complete, and report the actual output rather than an assumption.
+`npm run lint && npm test && npm run check:bundle` is the repository verification gate. Run all three before reporting a task complete, and report the actual output rather than an assumption.
 
 ## Debug flags
 

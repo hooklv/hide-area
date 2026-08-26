@@ -18,8 +18,6 @@ function fillDisc(m, cx, cy, r) {
   }
   return m;
 }
-const count = (m) => m.mask.reduce((a, v) => a + (v ? 1 : 0), 0);
-
 describe('largestComponent', () => {
   it('keeps the bigger blob and drops the smaller', () => {
     const m = blank(40, 30);

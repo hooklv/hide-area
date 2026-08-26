@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { calibrateA4, applyHomography, transformPoints } from '../src/lib/homography.js';
+import { calibrateA4, transformPoints } from '../src/lib/homography.js';
 import { maskToPolygon } from '../src/lib/contour.js';
 import { polygonArea, convertArea } from '../src/lib/area.js';
 

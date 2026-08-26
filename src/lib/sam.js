@@ -21,7 +21,8 @@ function clearUnsafeWebGpu(storage) {
 function storeUnsafeWebGpu(storage, status) {
   try {
     storage?.setItem(WEBGPU_UNSAFE_KEY, JSON.stringify({
-      reason: status.message,
+      // Store the bare reason; display wording is added where it is shown.
+      reason: status.details?.reason || status.message,
       details: status.details,
       recordedAt: new Date().toISOString(),
     }));

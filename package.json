@@ -9,13 +9,15 @@
     "check:bundle": "npm run build && node scripts/check-bundle.mjs",
     "preview": "vite preview",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "lint": "eslint ."
   },
   "dependencies": {
     "@huggingface/transformers": "3.7.6",
     "simplify-js": "^1.2.4"
   },
   "devDependencies": {
+    "eslint": "^10.9.1",
     "vite": "^7.1.14",
     "vitest": "^3.2.4"
   }

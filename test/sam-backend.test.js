@@ -57,11 +57,12 @@ describe('SAM backend fallback policy', () => {
       stage: 'backend-fallback',
       persist: true,
       message: 'WebGPU failed: device lost',
-      details: { availableStorageBufferBytes: 134217728 },
+      details: { reason: 'device lost', availableStorageBufferBytes: 134217728 },
     });
 
+    // The marker keeps the bare reason; 'WebGPU failed:' is display wording.
     expect(JSON.parse(storage.getItem(WEBGPU_UNSAFE_KEY))).toMatchObject({
-      reason: 'WebGPU failed: device lost',
+      reason: 'device lost',
       details: { availableStorageBufferBytes: 134217728 },
     });
 
@@ -122,7 +123,7 @@ describe('SAM backend fallback policy', () => {
       } else if (message.type === 'embed') {
         fakeWorker.emit({ type: 'done', id: message.id, payload: { backend: 'webgpu', dtype: 'fp32', ms: 1 } });
       } else if (message.type === 'decode') {
-        fakeWorker.emit({ type: 'gpu-fault', id: message.id, message: 'decode fault', details: { source: 'ORT device' } });
+        fakeWorker.emit({ type: 'gpu-fault', id: message.id, message: 'decode fault', details: { reason: 'decode fault', source: 'ORT device' } });
       }
     });
     let replacementInit;
@@ -148,7 +149,7 @@ describe('SAM backend fallback policy', () => {
     expect(decoded.mask).toBe(wasmDecodeMask);
     expect(faultedWorker.terminated).toBe(true);
     expect(replacementInit.forceWasm).toBe(true);
-    expect(replacementInit.unsafeWebGpu).toMatchObject({ reason: 'WebGPU failed: decode fault' });
+    expect(replacementInit.unsafeWebGpu).toMatchObject({ reason: 'decode fault' });
   });
 
   it('does not override a forced WebGPU retry with the stored marker', () => {

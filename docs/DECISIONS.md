@@ -108,3 +108,41 @@ The device caps `maxStorageBufferBindingSize` at 128 MB; SlimSAM's vision encode
 **Decision:** reject a segmentation mask when coverage is below 0.1%, above 90%, or when it has more than 32 components and the largest component contains less than 80% of the foreground.
 
 **Why:** this prevents obviously implausible masks from being converted into an outline and measurement after an inference failure. These thresholds are provisional and tuned against one real photo; further real-photo validation is not yet measured.
+
+## 14. Lint for undeclared identifiers, and test the worker module itself
+
+**Context:** `samWorker.js` returned `{ backend, dtype, fallbackReason }` at the end of
+`embed()`, but `fallbackReason` was never declared in that module. ES modules are strict
+mode, so reading it threw a `ReferenceError` the moment an embedding *succeeded* — on every
+backend, in normal mode as well as forced mode. It shipped to production and broke every
+measurement on the device: the phone log ended with
+`worker request failed {"type":"embed","error":"fallbackReason is not defined"}` and the UI
+showed `Model failed: fallbackReason is not defined`. No mask could be produced at all.
+
+Nothing in the repository could have caught it. No test loaded `samWorker.js`: every SAM
+test drove a `FakeWorker` emitting canned `done` messages, so the worker's own success paths
+had zero coverage, including the recovery test's replacement-worker embed. An undeclared
+identifier is valid syntax, so the Vite build emitted it without complaint, and
+`check:bundle` only scans for unresolved bare imports. There was no linter.
+
+**Decision:** two guards.
+
+1. ESLint with exactly two rules, `no-undef` and `no-unused-vars`, wired into the deploy
+   workflow next to `npm test`. No `eslint:recommended`, no stylistic rules, no formatter,
+   no Prettier. This config exists to catch undeclared identifiers, not to have opinions
+   about code.
+2. `test/sam-worker.test.js`, which loads the real worker module with a stubbed worker
+   global scope and a mocked Transformers.js, and drives `init` -> `embed` -> `decode`
+   asserting the posted payloads — including a successful embed in the forced-WASM
+   replacement worker, which is the exact path the device was on when it failed.
+
+**Why:** the defect class here is not "a bug slipped through", it is "an entire file was
+unreachable by the test suite while the build stayed green". A mocked worker test cannot
+validate inference quality, and is not meant to; real segmentation validation stays a
+browser check on a real photo. What it does validate is the worker's protocol and payload
+contract, which is what broke.
+
+**Cost accepted:** one devDependency and a CI step. Both guards were verified against the
+unfixed code before the fix landed: lint reported `'fallbackReason' is not defined` at
+`samWorker.js:255`, and all four new tests failed, three reproducing
+`fallbackReason is not defined` and one reproducing `[object GPUValidationError]`.
