@@ -40,6 +40,14 @@ hide outline has curvature a rectangle does not, so a tolerance that looks
 right on a rectangle says little about the shape this is for. Final tuning
 waits for a real hide photo.
 
+Even spacing has landed: vertices are placed at equal arc length between
+pinned corners, targeting 60. The item stays open, and the knob is now
+`TARGET_VERTICES` rather than a tolerance. That knob is a count, not a
+spacing, so a hide with a much longer perimeter than the A4 fixture gets a
+much coarser vertex spacing out of the same target. Whether 60 is enough to
+hand-correct a hide edge is unverified, and it is the specific thing the real
+hide photo has to answer.
+
 ### 3. Session list
 
 With copy and CSV export.
