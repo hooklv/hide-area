@@ -192,4 +192,37 @@ Bilinear interpolation is per-channel, so this is arithmetically identical
 rather than approximately so, and `test/mask-slicing.test.js` proves it against
 the installed 3.7.6 by running both orders and comparing. It also tightens
 DECISIONS 9 rather than bending it: candidate selection now happens strictly
-before any postprocessing, and thresholding still happens last.
+before any postprocessing, and thresholding still happens last. The decode time
+this was expected to save did not appear on the device; see DECISIONS 16.
+
+## 16. The single-channel slice is kept for correctness, not for the speed it did not deliver
+
+**Measured:** decode time on the Android test phone, five runs spanning the
+change: 350, 307, 353, 320, 241 ms. The before and after values are interleaved
+across that range. There is no separation between the two groups.
+
+**Predicted:** roughly a third off decode time, on the reasoning in DECISIONS 15
+that `post_process_masks` was bilinearly interpolating three candidates to 1024²
+and then to full image size when only one survived.
+
+**Decision:** keep the change, and stop describing it as a speed improvement.
+
+**Why:** the prediction did not materialise. The five values have a mean of
+about 314 ms and a standard deviation of about 45 ms, so a saving of roughly a
+third — some 105 ms, or 2.3 standard deviations — would have stood clear of that
+spread. Nothing of the sort appeared. Five runs is a small sample and a smaller
+effect could still be hiding in it, but the specific effect that was predicted is
+not there. Whatever the interpolation costs, it is not where the decode time
+goes.
+
+The change stays on its own merits, which were always the stronger argument: it
+is arithmetically identical (`test/mask-slicing.test.js` proves it against the
+installed 3.7.6), it tightens DECISIONS 9 by putting candidate selection strictly
+before any postprocessing, and it cuts peak worker memory by allocating one
+full-size float mask instead of three — which matters more than milliseconds on
+a mid-range phone.
+
+**Correction:** DECISIONS 15's "One mask channel through postprocessing"
+paragraph is written as though discarding two of three interpolations were self
+evidently worth having. Read it as a correctness and memory argument. The timing
+claim is settled here and it is negative.
