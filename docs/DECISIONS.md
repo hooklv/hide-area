@@ -207,14 +207,20 @@ and then to full image size when only one survived.
 
 **Decision:** keep the change, and stop describing it as a speed improvement.
 
-**Why:** the prediction did not materialise, and five runs at this spread cannot
-detect an effect that size if it exists. Whatever the interpolation costs, it is
-not where the decode time goes. The change stays on its own merits, which are
-the ones that were always the stronger argument: it is arithmetically identical
-(`test/mask-slicing.test.js` proves it against the installed 3.7.6), it tightens
-DECISIONS 9 by putting candidate selection strictly before any postprocessing,
-and it cuts peak worker memory by allocating one full-size float mask instead of
-three — which matters more than milliseconds on a mid-range phone.
+**Why:** the prediction did not materialise. The five values have a mean of
+about 314 ms and a standard deviation of about 45 ms, so a saving of roughly a
+third — some 105 ms, or 2.3 standard deviations — would have stood clear of that
+spread. Nothing of the sort appeared. Five runs is a small sample and a smaller
+effect could still be hiding in it, but the specific effect that was predicted is
+not there. Whatever the interpolation costs, it is not where the decode time
+goes.
+
+The change stays on its own merits, which were always the stronger argument: it
+is arithmetically identical (`test/mask-slicing.test.js` proves it against the
+installed 3.7.6), it tightens DECISIONS 9 by putting candidate selection strictly
+before any postprocessing, and it cuts peak worker memory by allocating one
+full-size float mask instead of three — which matters more than milliseconds on
+a mid-range phone.
 
 **Correction:** DECISIONS 15's "One mask channel through postprocessing"
 paragraph is written as though discarding two of three interpolations were self
