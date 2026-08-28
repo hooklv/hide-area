@@ -16,7 +16,7 @@ Product assumption: one leather trader on a mid-range Android phone, in a wareho
 
 ## Stack
 
-Vite, vanilla JS ES modules, no framework. Transformers.js `3.7.6` (exact pin) with `Xenova/slimsam-77-uniform`. `simplify-js` for polygon reduction. Vitest for tests. Deployed to GitHub Pages by `.github/workflows/deploy-pages.yml` on push to `main`.
+Vite, vanilla JS ES modules, no framework. Transformers.js `3.7.6` (exact pin) with `Xenova/slimsam-77-uniform`. `simplify-js` for corner detection inside the contour resampler. Vitest for tests. Deployed to GitHub Pages by `.github/workflows/deploy-pages.yml` on push to `main`.
 
 No React, no OpenCV.js, no TypeScript migration, no state management library. Adding any of these needs an explicit decision recorded in `docs/DECISIONS.md`.
 
@@ -32,7 +32,7 @@ Five step modules driven by a state machine in `src/main.js`. Shared mutable sta
 | 4 Review | `src/steps/review.js` | Mask to editable polygon, vertex editing |
 | 5 Result | `src/steps/result.js` | Polygon to mm, area, formatting |
 
-Libraries in `src/lib/`: `area.js` (shoelace, units), `contour.js` (largest component, crack tracing, simplification), `homography.js` (A4 calibration, projective transforms), `sam.js` (worker RPC wrapper), `samWorker.js` (model load, embedding, decode).
+Libraries in `src/lib/`: `area.js` (shoelace, units), `contour.js` (largest component, crack tracing, even resampling), `homography.js` (A4 calibration, projective transforms), `sam.js` (worker RPC wrapper), `samWorker.js` (model load, embedding, decode).
 
 UI in `src/ui/`: `canvasView.js` (two canvases, pan/zoom, coordinate conversion), `draw.js`, `loupe.js`.
 
@@ -73,7 +73,9 @@ Do not break these without saying so explicitly and updating this file.
 **Contour**
 - `maskToPolygon()` keeps the largest 4-connected component, traces the outer boundary only, and discards holes by design.
 - Tracing follows pixel-edge cracks, not pixel centres. The raw crack-edge ring encloses the foreground component's pixel area; do not replace it with centre-based tracing without validating the area behavior.
-- Simplification targets 100 to 300 vertices. The final area measures the simplified editable polygon, not the raw mask.
+- The editable outline is produced by even spacing, not by a tolerance search. `resampleContour()` pins the genuine corners (Douglas-Peucker at a quarter of the vertex spacing) and then walks each corner-to-corner arc placing vertices at equal arc length, targeting 60 vertices in total. The result lands within a few vertices of that target; `maxVertices` (120) only caps an outline whose corners alone would flood the budget. Do not replace this with a vertex-count search on Douglas-Peucker tolerance: on a pixel staircase that filter is all-or-nothing at one pixel, so any tolerance low enough to reach a three-figure vertex count retains every single-pixel jog as a dense run and leaves the straight stretches bare.
+- Every emitted vertex lies on the traced crack-edge ring, so the editable polygon stays inscribed in it. On the stored A4 fixture mask this costs 0.07% of area; on a synthetic lobed hide shape at the same target it costs 0.34%. The 60-vertex target is tuned against the A4 fixture and a synthetic curved shape only; final tuning waits for a real hide photo.
+- The final area measures the editable polygon, not the raw mask.
 
 **Config**
 - `base: './'` keeps the build portable across static host subpaths.
@@ -91,7 +93,7 @@ Do not break these without saying so explicitly and updating this file.
 npm install
 npm run dev              # local dev server
 npm run dev -- --host    # reachable from a phone on the same Wi-Fi
-npm test                 # vitest run, currently 92 tests
+npm test                 # vitest run, currently 103 tests
 npm run test:watch       # Vitest watch mode
 npm run build            # production bundle to dist, under 1 s
 npm run check:bundle     # build and reject unresolved bare imports in emitted JavaScript

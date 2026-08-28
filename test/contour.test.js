@@ -1,6 +1,29 @@
 import { describe, it, expect } from 'vitest';
-import { largestComponent, traceOuterContour, simplifyToBudget, maskToPolygon } from '../src/lib/contour.js';
-import { polygonArea } from '../src/lib/area.js';
+import { largestComponent, traceOuterContour, cornerIndices, resampleContour, maskToPolygon } from '../src/lib/contour.js';
+import { polygonArea, polygonPerimeter } from '../src/lib/area.js';
+
+/** Gap lengths between consecutive vertices of a closed ring, sorted ascending. */
+function gaps(points) {
+  return points
+    .map((p, i) => {
+      const q = points[(i + 1) % points.length];
+      return Math.hypot(p.x - q.x, p.y - q.y);
+    })
+    .sort((a, b) => a - b);
+}
+/** How lumpy the spacing is: 1 is perfectly even, the old output scored 56. */
+function spacingRatio(points) {
+  const g = gaps(points);
+  return g[g.length - 1] / g[Math.floor(g.length / 2)];
+}
+/** Distance from `point` to the nearest vertex of `points`. */
+function nearest(point, points) {
+  return Math.min(...points.map((p) => Math.hypot(p.x - point.x, p.y - point.y)));
+}
+function ringOf(m) {
+  const comp = largestComponent(m.mask, m.width, m.height);
+  return traceOuterContour(comp.mask, m.width, m.height, comp.start);
+}
 
 /** @returns {{mask:Uint8Array,width:number,height:number}} */
 function blank(width, height) {
@@ -89,32 +112,130 @@ describe('traceOuterContour', () => {
   });
 });
 
-describe('simplifyToBudget', () => {
-  it('leaves small polygons alone', () => {
-    const pts = [{ x: 0, y: 0 }, { x: 4, y: 0 }, { x: 4, y: 3 }];
-    expect(simplifyToBudget(pts).points).toHaveLength(3);
+describe('cornerIndices', () => {
+  it('finds the four corners of a rectangle and nothing else', () => {
+    const ring = ringOf(fillRect(blank(200, 200), 20, 30, 120, 90));
+    const corners = cornerIndices(ring, 5).map((i) => ring[i]);
+    expect(corners).toHaveLength(4);
+    expect(corners.map((p) => `${p.x},${p.y}`).sort()).toEqual(
+      ['140,120', '140,30', '20,120', '20,30'],
+    );
   });
 
-  it('collapses a staircase ring into the vertex budget', () => {
-    const m = fillDisc(blank(700, 700), 350, 350, 300);
-    const comp = largestComponent(m.mask, m.width, m.height);
-    const ring = traceOuterContour(comp.mask, m.width, m.height, comp.start);
+  it('drops the ring start when the outline runs straight through it', () => {
+    // The trace starts at the top-left pixel's upper-left crack corner, which on
+    // this shape is the midpoint of the top edge, not a corner of it.
+    const m = blank(200, 200);
+    fillRect(m, 20, 40, 120, 80);
+    fillRect(m, 60, 30, 40, 10); // a tab whose left edge the walk starts on
+    const ring = ringOf(m);
+    expect(ring[0]).toEqual({ x: 60, y: 30 });
+    // at a tolerance far coarser than the tab, the start is not a corner
+    expect(cornerIndices(ring, 30)).not.toContain(0);
+  });
+
+  it('returns indices in ring order', () => {
+    const ring = ringOf(fillDisc(blank(200, 200), 100, 100, 60));
+    const idx = cornerIndices(ring, 4);
+    expect(idx.length).toBeGreaterThan(3);
+    for (let i = 1; i < idx.length; i++) expect(idx[i]).toBeGreaterThan(idx[i - 1]);
+  });
+});
+
+describe('resampleContour', () => {
+  it('spaces vertices evenly along a staircase ring, where Douglas-Peucker clusters them', () => {
+    const ring = ringOf(fillDisc(blank(700, 700), 350, 350, 300));
     expect(ring.length).toBeGreaterThan(2000);
-    const out = simplifyToBudget(ring, { minVertices: 100, maxVertices: 300 });
-    expect(out.points.length).toBeLessThanOrEqual(300);
-    expect(out.points.length).toBeGreaterThanOrEqual(100);
-    // simplification must not distort the area by more than half a percent
+    const out = resampleContour(ring);
+    const g = gaps(out.points);
+    // no two vertices on top of each other, and no bare stretch
+    expect(g[0]).toBeGreaterThan(out.spacing / 3);
+    expect(g[g.length - 1]).toBeLessThan(out.spacing * 2);
+    expect(spacingRatio(out.points)).toBeLessThan(1.6);
+  });
+
+  it('lands close to the vertex target', () => {
+    const ring = ringOf(fillDisc(blank(700, 700), 350, 350, 300));
+    for (const targetVertices of [30, 60, 100]) {
+      const out = resampleContour(ring, { targetVertices });
+      expect(out.points.length).toBeGreaterThanOrEqual(targetVertices - 8);
+      expect(out.points.length).toBeLessThanOrEqual(targetVertices + 8);
+    }
+  });
+
+  it('keeps the area of the ring it resamples', () => {
+    const ring = ringOf(fillDisc(blank(700, 700), 350, 350, 300));
+    const out = resampleContour(ring);
     expect(Math.abs(polygonArea(out.points) / polygonArea(ring) - 1)).toBeLessThan(0.005);
+  });
+
+  it('keeps every vertex on the traced ring, so the result stays inscribed', () => {
+    const ring = ringOf(fillDisc(blank(400, 400), 200, 200, 150));
+    const out = resampleContour(ring, { targetVertices: 40 });
+    expect(polygonArea(out.points)).toBeLessThanOrEqual(polygonArea(ring));
+  });
+
+  it('pins genuine corners exactly', () => {
+    const ring = ringOf(fillRect(blank(400, 300), 40, 50, 300, 200));
+    const out = resampleContour(ring, { targetVertices: 40 });
+    for (const corner of [{ x: 40, y: 50 }, { x: 340, y: 50 }, { x: 340, y: 250 }, { x: 40, y: 250 }]) {
+      expect(nearest(corner, out.points)).toBe(0);
+    }
+  });
+
+  it('pins the sharp point of a spike instead of rounding it off', () => {
+    // a disc with a narrow triangular spike: the tip is the vertex that matters
+    const m = blank(400, 400);
+    fillDisc(m, 200, 240, 120);
+    for (let y = 40; y < 130; y++) {
+      const half = Math.max(1, Math.round((y - 40) / 3));
+      for (let x = 200 - half; x <= 200 + half; x++) m.mask[y * m.width + x] = 1;
+    }
+    const ring = ringOf(m);
+    const tip = ring.reduce((best, p) => (p.y < best.y ? p : best), ring[0]);
+    expect(tip.y).toBe(40);
+    const out = resampleContour(ring, { targetVertices: 40 });
+    expect(nearest(tip, out.points)).toBe(0);
+  });
+
+  it('never packs vertices closer than the resolution of the ring itself', () => {
+    const ring = ringOf(fillRect(blank(40, 40), 10, 10, 6, 5));
+    expect(ring).toHaveLength(22);
+    const out = resampleContour(ring, { targetVertices: 200 });
+    expect(out.points.length).toBeLessThanOrEqual(ring.length);
+    expect(gaps(out.points)[0]).toBeGreaterThanOrEqual(1);
+  });
+
+  it('caps the vertex count on an outline whose corners alone would flood it', () => {
+    // a comb: every tooth is a genuine corner, far more of them than the budget
+    const m = blank(600, 200);
+    fillRect(m, 20, 120, 560, 40);
+    for (let t = 0; t < 90; t++) fillRect(m, 20 + t * 6, 40, 3, 80);
+    const ring = ringOf(m);
+    const out = resampleContour(ring, { targetVertices: 60, maxVertices: 120 });
+    expect(out.points.length).toBeLessThanOrEqual(120);
+  });
+
+  it('leaves a ring too short to resample alone', () => {
+    const pts = [{ x: 0, y: 0 }, { x: 4, y: 0 }, { x: 4, y: 3 }];
+    expect(resampleContour(pts).points).toHaveLength(3);
   });
 });
 
 describe('maskToPolygon', () => {
-  it('returns a simplified rectangle', () => {
+  it('returns an evenly spaced rectangle that still has its corners', () => {
     const m = fillRect(blank(200, 200), 20, 30, 120, 90);
     const poly = maskToPolygon(m.mask, m.width, m.height);
     expect(poly.pixelCount).toBe(120 * 90);
+    // vertices added along a straight edge are collinear, so area is untouched
     expect(polygonArea(poly.points)).toBeCloseTo(120 * 90, 6);
-    expect(poly.points.length).toBe(4);
+    expect(poly.points.length).toBeGreaterThanOrEqual(52);
+    expect(poly.points.length).toBeLessThanOrEqual(68);
+    expect(spacingRatio(poly.points)).toBeLessThan(1.6);
+    for (const corner of [{ x: 20, y: 30 }, { x: 140, y: 30 }, { x: 140, y: 120 }, { x: 20, y: 120 }]) {
+      expect(nearest(corner, poly.points)).toBe(0);
+    }
+    expect(poly.spacing).toBeCloseTo(polygonPerimeter(poly.points) / 60, 6);
   });
 
   it('ignores a second smaller shape in the mask', () => {

@@ -36,7 +36,7 @@ describe('real EXIF A4 fixture', () => {
 
     const calibration = calibrateA4(metadata.a4Corners);
     expect(calibration.ok).toBe(true);
-    const contour = maskToPolygon(mask, source.width, source.height, { minVertices: 100, maxVertices: 300 });
+    const contour = maskToPolygon(mask, source.width, source.height);
     expect(contour).not.toBeNull();
     const measuredM2 = convertArea(polygonArea(transformPoints(calibration.H, contour.points))).m2;
     expect(Math.abs(measuredM2 / metadata.expectedAreaM2 - 1)).toBeLessThan(0.02);
@@ -59,5 +59,27 @@ describe('real EXIF A4 fixture', () => {
     }
     expect(coveredPixels / sheetPixels).toBeGreaterThanOrEqual(0.9);
     expect(outsideMaskPixels / outsidePixels).toBeLessThan(0.05);
+  });
+
+  it('produces an outline a finger can edit: evenly spaced, and few enough to work with', async () => {
+    const source = await RawImage.fromURL(maskUrl.pathname);
+    const mask = new Uint8Array(source.width * source.height);
+    for (let index = 0; index < mask.length; index++) mask[index] = source.data[index * source.channels] > 0 ? 1 : 0;
+
+    const contour = maskToPolygon(mask, source.width, source.height);
+    expect(contour.points.length).toBeGreaterThanOrEqual(40);
+    expect(contour.points.length).toBeLessThanOrEqual(80);
+
+    const gaps = contour.points
+      .map((point, index) => {
+        const next = contour.points[(index + 1) % contour.points.length];
+        return Math.hypot(point.x - next.x, point.y - next.y);
+      })
+      .sort((a, b) => a - b);
+    const median = gaps[Math.floor(gaps.length / 2)];
+    // The Douglas-Peucker output this replaced scored 56 here: half its vertices
+    // sat one pixel apart while other stretches of the same edge ran 112 px bare.
+    expect(gaps[gaps.length - 1] / median).toBeLessThan(3);
+    expect(gaps[0]).toBeGreaterThan(1);
   });
 });

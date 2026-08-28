@@ -101,54 +101,142 @@ export function traceOuterContour(mask, width, height, start) {
   return points;
 }
 
-/**
- * Douglas-Peucker simplification tuned to a vertex budget: the tolerance is
- * searched so the result lands inside [minVertices, maxVertices] where possible.
- * @returns {{points:{x:number,y:number}[], tolerance:number}}
- */
-export function simplifyToBudget(points, { minVertices = 100, maxVertices = 300, closed = true } = {}) {
-  // Douglas-Peucker pins the endpoints of the polyline it is given. Closing the
-  // ring first makes it pin the ring's start corner instead of inventing a
-  // spurious extra vertex next to it.
-  const run = (tol) => {
-    if (!closed) return simplify(points, tol, true);
-    const out = simplify([...points, points[0]], tol, true);
-    const last = out[out.length - 1];
-    if (out.length > 1 && last.x === out[0].x && last.y === out[0].y) out.pop();
-    return out;
-  };
-  if (points.length <= maxVertices) return { points: run(0), tolerance: 0 };
-  let lo = 0.05;
-  let hi = 64;
-  let best = run(hi);
-  let bestTol = hi;
-  for (let i = 0; i < 24 && hi - lo > 0.01; i++) {
-    const mid = (lo + hi) / 2;
-    const out = run(mid);
-    if (out.length > maxVertices) {
-      lo = mid;
-    } else {
-      best = out;
-      bestTol = mid;
-      if (out.length >= minVertices) break;
-      hi = mid;
-    }
-  }
-  return { points: best, tolerance: bestTol };
+// One vertex every `perimeter / TARGET_VERTICES` of contour, which is what the
+// operator actually drags. See AGENTS.md, Contour invariants, for the rule.
+const TARGET_VERTICES = 60;
+const MAX_VERTICES = 120;
+// Never ask for vertices closer together than one crack-grid step: below that
+// the resampling would invent points the traced ring does not contain.
+const MIN_SPACING = 1;
+// A deviation worth pinning is a quarter of the spacing between vertices. Any
+// smaller and even spacing would put a vertex there anyway.
+const CORNER_TOLERANCE_FRACTION = 0.25;
+
+/** Perpendicular distance from p to the infinite line through a and b. */
+function perpendicularDistance(p, a, b) {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const len = Math.hypot(dx, dy);
+  if (len === 0) return Math.hypot(p.x - a.x, p.y - a.y);
+  return Math.abs(dy * (p.x - a.x) - dx * (p.y - a.y)) / len;
 }
 
 /**
- * Binary mask -> simplified outer polygon in image space.
+ * Indices into `ring` of the vertices Douglas-Peucker keeps at `tolerance`:
+ * the places where the outline genuinely turns. At the tolerances used here
+ * (several pixels) these are corners and sharp points, not staircase noise.
+ * @returns {number[]} strictly increasing ring indices
+ */
+export function cornerIndices(ring, tolerance) {
+  const closed = [...ring, ring[0]];
+  const kept = simplify(closed, tolerance, true);
+  if (kept.length > 1) {
+    const last = kept[kept.length - 1];
+    if (last.x === kept[0].x && last.y === kept[0].y) kept.pop();
+  }
+  // Douglas-Peucker returns a subsequence of its input, in input order, so a
+  // single forward scan recovers the indices. A ring that visits the same crack
+  // corner twice (a diagonal pinch point) can match the earlier visit; that
+  // moves an arc boundary, it does not break the ordering.
+  const indices = [];
+  for (let i = 0, k = 0; i < ring.length && k < kept.length; i++) {
+    if (ring[i].x === kept[k].x && ring[i].y === kept[k].y) { indices.push(i); k++; }
+  }
+  // Douglas-Peucker pins the endpoints of the polyline it is given, so the
+  // ring's arbitrary start corner always survives. Drop it when the outline
+  // runs straight through it, or it anchors a corner that is not there.
+  if (indices.length > 2 && indices[0] === 0
+    && perpendicularDistance(ring[0], ring[indices[indices.length - 1]], ring[indices[1]]) <= tolerance) {
+    indices.shift();
+  }
+  return indices;
+}
+
+/**
+ * Resample a traced ring to vertices spaced evenly along the contour, with the
+ * genuine corners pinned.
+ *
+ * Douglas-Peucker alone cannot do this. It keeps points by perpendicular
+ * distance from a chord, so on a pixel staircase it is all-or-nothing at one
+ * pixel: below that tolerance every single-pixel jog survives in a dense run,
+ * above it the whole edge collapses to its endpoints. Vertex spacing is
+ * therefore driven by arc length here, and Douglas-Peucker is used only at a
+ * coarse tolerance to find the corners that the even spacing must not cross.
+ *
+ * Every emitted vertex lies on the traced ring, so the polygon stays inscribed
+ * in it and the area moves only by the curvature each chord cuts off.
+ *
+ * @param {{x:number,y:number}[]} ring closed ring, first point not repeated
+ * @returns {{points:{x:number,y:number}[], spacing:number, cornerTolerance:number}}
+ */
+export function resampleContour(ring, { targetVertices = TARGET_VERTICES, maxVertices = MAX_VERTICES } = {}) {
+  const n = ring.length;
+  const copy = () => ring.map((p) => ({ x: p.x, y: p.y }));
+  if (n < 4) return { points: copy(), spacing: 0, cornerTolerance: 0 };
+
+  const segment = new Float64Array(n);
+  let perimeter = 0;
+  for (let i = 0; i < n; i++) {
+    const a = ring[i];
+    const b = ring[(i + 1) % n];
+    segment[i] = Math.hypot(b.x - a.x, b.y - a.y);
+    perimeter += segment[i];
+  }
+  if (!(perimeter > 0)) return { points: copy(), spacing: 0, cornerTolerance: 0 };
+
+  const spacing = Math.max(perimeter / Math.max(3, targetVertices), MIN_SPACING);
+  let cornerTolerance = spacing * CORNER_TOLERANCE_FRACTION;
+  let corners = cornerIndices(ring, cornerTolerance);
+  // An outline whose corners alone would fill the budget gets a coarser corner
+  // test rather than an outline too dense to edit.
+  for (let guard = 0; corners.length > maxVertices && guard < 24; guard++) {
+    cornerTolerance *= 1.6;
+    corners = cornerIndices(ring, cornerTolerance);
+  }
+  if (corners.length === 0) corners = [0];
+
+  // Forward arc length between two ring indices, and the point that far along.
+  const arcLength = (from, to) => {
+    let length = 0;
+    for (let i = from; i !== to; i = (i + 1) % n) length += segment[i];
+    return length;
+  };
+  const pointAlong = (from, distance) => {
+    let i = from;
+    let left = distance;
+    while (left > segment[i]) { left -= segment[i]; i = (i + 1) % n; }
+    const a = ring[i];
+    const b = ring[(i + 1) % n];
+    const t = segment[i] === 0 ? 0 : left / segment[i];
+    return { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t };
+  };
+
+  const points = [];
+  for (let c = 0; c < corners.length; c++) {
+    const from = corners[c];
+    const to = corners[(c + 1) % corners.length];
+    points.push({ x: ring[from].x, y: ring[from].y });
+    const length = corners.length === 1 ? perimeter : arcLength(from, to);
+    // Each corner-to-corner arc carries whole steps of its own, so spacing is
+    // even inside an arc and within a rounding of `spacing` between arcs.
+    const parts = Math.max(1, Math.round(length / spacing));
+    for (let k = 1; k < parts; k++) points.push(pointAlong(from, (length * k) / parts));
+  }
+  return { points, spacing, cornerTolerance };
+}
+
+/**
+ * Binary mask -> evenly spaced editable outer polygon in image space.
  * @param {Uint8Array|Uint8ClampedArray} mask row-major, non-zero = foreground
  * @param {number} width @param {number} height
- * @returns {{points:{x:number,y:number}[], pixelCount:number, tolerance:number}|null}
+ * @returns {{points:{x:number,y:number}[], pixelCount:number, spacing:number}|null}
  */
 export function maskToPolygon(mask, width, height, opts = {}) {
   const comp = largestComponent(mask, width, height);
   if (!comp || comp.count < 4) return null;
   const ring = traceOuterContour(comp.mask, width, height, comp.start);
   if (ring.length < 4) return null;
-  const { points, tolerance } = simplifyToBudget(ring, opts);
+  const { points, spacing } = resampleContour(ring, opts);
   if (points.length < 3) return null;
-  return { points, pixelCount: comp.count, tolerance };
+  return { points, pixelCount: comp.count, spacing };
 }

@@ -109,7 +109,7 @@ describe('calibration + area, overhead and tilted', () => {
 
       it('runs the whole mask -> contour -> mm pipeline within 2%', () => {
         const mask = rasterize(sheetPx, IMG_W, IMG_H);
-        const poly = maskToPolygon(mask, IMG_W, IMG_H, { minVertices: 20, maxVertices: 300 });
+        const poly = maskToPolygon(mask, IMG_W, IMG_H);
         expect(poly).not.toBeNull();
         const m2 = convertArea(polygonArea(transformPoints(cal.H, poly.points))).m2;
         expect(Math.abs(m2 / 0.06237 - 1)).toBeLessThan(0.02);

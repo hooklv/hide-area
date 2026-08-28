@@ -9,7 +9,8 @@ export const canEnter = (state) => !!state.segment.mask;
 
 function trace(state) {
   const { data, width, height } = state.segment.mask;
-  const poly = maskToPolygon(data, width, height, { minVertices: 100, maxVertices: 300 });
+  // Vertex count and spacing are the contour module's rule, not this step's.
+  const poly = maskToPolygon(data, width, height);
   state.review.polygon = poly ? poly.points : null;
   state.review.fromVersion = state.segment.version;
   state.review.pixelCount = poly ? poly.pixelCount : 0;
