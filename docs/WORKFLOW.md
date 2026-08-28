@@ -25,8 +25,20 @@ The output.
 ## Verified state
 
 A merged commit is unverified until the maintainer confirms it on the device.
-Once he confirms, tag it `verified-YYYY-MM-DD-<short-sha>` and push the tag.
-The most recent such tag is the known good state.
+Once he confirms, it is tagged `verified-YYYY-MM-DD-<short-sha>`. The most
+recent such tag is the known good state.
+
+An agent cannot create that tag. GitHub refuses `refs/tags` from agent
+credentials, so the agent prints the two commands with the real date and sha
+filled in, and the maintainer runs them:
+
+```
+git tag verified-YYYY-MM-DD-<short-sha> <short-sha>
+git push origin verified-YYYY-MM-DD-<short-sha>
+```
+
+Until the maintainer has run them the commit is untagged, whatever an agent
+reported.
 
 ## Rollback
 
