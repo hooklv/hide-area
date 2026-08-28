@@ -45,6 +45,10 @@ export default [
         URLSearchParams: 'readonly',
         TextEncoder: 'readonly',
         TextDecoder: 'readonly',
+        // Build stamp, replaced by Vite `define` (see vite.config.js).
+        __BUILD_SHA__: 'readonly',
+        __BUILD_SHA_SHORT__: 'readonly',
+        __BUILD_TIME__: 'readonly',
       },
     },
     rules: {

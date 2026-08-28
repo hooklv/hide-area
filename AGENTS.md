@@ -79,6 +79,7 @@ Do not break these without saying so explicitly and updating this file.
 - `worker.format: 'es'` keeps the SAM worker an ES module.
 - `@huggingface/transformers` is pinned exactly to `3.7.6`. The worker calls `processor.reshape_input_points` and `image_processor.add_input_labels` directly, so do not add a caret or update the package without validating prompt scaling on a real photo.
 - `samWorker.js` sets `env.allowLocalModels = false`; this app does not bundle a local model directory. Its `init` message carries supported inference flags to the worker.
+- `define` injects `__BUILD_SHA__`, `__BUILD_SHA_SHORT__` and `__BUILD_TIME__` at build time. Read them only through `src/lib/buildInfo.js`, which falls back to `unknown` so a checkout without git metadata still builds. Declare any new define in `eslint.config.js` globals or `no-undef` will fail.
 
 ## Commands
 
@@ -86,7 +87,7 @@ Do not break these without saying so explicitly and updating this file.
 npm install
 npm run dev              # local dev server
 npm run dev -- --host    # reachable from a phone on the same Wi-Fi
-npm test                 # vitest run, currently 89 tests
+npm test                 # vitest run, currently 92 tests
 npm run test:watch       # Vitest watch mode
 npm run build            # production bundle to dist, under 1 s
 npm run check:bundle     # build and reject unresolved bare imports in emitted JavaScript
@@ -100,6 +101,8 @@ npm run preview          # serve the built bundle
 
 `?backend=wasm` and `?backend=webgpu` force the inference backend for like-for-like comparison on the same photo. Invalid values throw. Without the parameter the worker tries WebGPU when `navigator.gpu` is available, then falls back to WASM.
 
+The short build SHA is shown at the bottom of the page in every session, with no flag. It is how a result reported by message is tied to the code that produced it, so do not hide it behind `?debug=1`. The full SHA and the build timestamp are the first line of the debug log, before the session line.
+
 `?debug=1` enables the on-screen, collapsible diagnostic log for phone-only failures. It records device capabilities, image dimensions, worker phases, model request outcomes, progress, console warnings/errors, and unhandled errors; its Copy all button produces a plain-text report. It must remain absent without the flag.
 
 Segmentation diagnostics (logit min/max/mean, selected candidate index, IoU score, thresholded pixel count, prompt coordinates before and after transform) are written to the console under `[SAM decode diagnostics]` and drawn as a canvas overlay.
@@ -109,6 +112,13 @@ Segmentation diagnostics (logit min/max/mean, selected candidate index, IoU scor
 `test/fixtures/a4-on-floor.jpeg` is the canonical real-phone segmentation fixture: it has EXIF `upper-right` orientation, canonical A4 metadata in orientation-normalized decoded space, and must replace generated rectangles in browser reproductions. `load.js` asserts its 3000 x 4000 portrait decode and returns coordinates scaled to the actual runtime image; Vitest verifies geometry and the stored browser-generated mask, while browser automation remains the authoritative real SAM inference check.
 
 All browser verification of segmentation must run against `npm run preview` served from a subpath, never `npm run dev`.
+
+## Planning
+
+`docs/ROADMAP.md` is the only planning document. It holds the goal, the
+condition for calling the current push done, the three tracks and what is
+parked. Do not start a parallel list somewhere else, and do not add items to it
+that the maintainer has not asked for.
 
 ## What not to do
 

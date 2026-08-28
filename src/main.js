@@ -8,6 +8,7 @@
 
 import { CanvasView } from './ui/canvasView.js';
 import { DebugLog } from './ui/debug.js';
+import { BUILD_SHA, BUILD_SHA_SHORT, BUILD_TIME } from './lib/buildInfo.js';
 import { SamSession } from './lib/sam.js';
 import { initialState, resetState, setImageState } from './lib/session.js';
 import * as photo from './steps/photo.js';
@@ -22,7 +23,13 @@ const stage = document.getElementById('stage');
 const stepsEl = document.getElementById('steps');
 const panelEl = document.getElementById('panel');
 const emptyEl = document.getElementById('stage-empty');
+const buildStampEl = document.getElementById('build-stamp');
 const debug = new DebugLog();
+
+// Shown in every session, not just under ?debug=1: the operator reports results
+// by message and the short SHA is what makes "it showed 3.9" attributable.
+buildStampEl.textContent = `build ${BUILD_SHA_SHORT}`;
+buildStampEl.title = `${BUILD_SHA} built ${BUILD_TIME}`;
 
 const state = initialState();
 const view = new CanvasView({

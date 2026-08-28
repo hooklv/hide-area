@@ -316,6 +316,8 @@ async function decode(points) {
   // thrown away immediately. Bilinear interpolation is per-channel, so slicing
   // first is arithmetically identical (test/mask-slicing.test.js proves it on
   // the installed library) and keeps DECISIONS 9's order: select, then threshold.
+  // This is a correctness and peak-memory change, not a speed one: measured
+  // decode time did not move on the test phone. See DECISIONS 16.
   const scores = outputs.iou_scores.data;
   let best = 0;
   for (let i = 1; i < scores.length; i++) if (scores[i] > scores[best]) best = i;

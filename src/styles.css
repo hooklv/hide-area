@@ -218,6 +218,19 @@ button.btn.wide { flex: 1 1 140px; }
 
 input[type="file"] { display: none; }
 
+/* Visible without ?debug=1: a field report has to name the build it came from. */
+.build-stamp {
+  flex: 0 0 auto;
+  padding: 4px 14px calc(4px + env(safe-area-inset-bottom));
+  border-top: 1px solid var(--line);
+  background: var(--bg);
+  color: #6b737b;
+  font: 11px/1.3 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  text-align: right;
+  -webkit-user-select: text;
+  user-select: text;
+}
+
 .debug-log {
   position: fixed;
   right: 8px;

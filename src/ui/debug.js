@@ -1,3 +1,5 @@
+import { BUILD_SHA, BUILD_TIME } from '../lib/buildInfo.js';
+
 function stringify(value) {
   if (value === undefined) return '';
   if (typeof value === 'string') return value;
@@ -10,6 +12,9 @@ export class DebugLog {
     this.lines = [];
     if (!this.enabled) return;
     this._mount();
+    // First line, before anything else: every log that reaches the maintainer
+    // has to say which build produced it.
+    this.log('main', 'build', { sha: BUILD_SHA, builtAt: BUILD_TIME });
     this.log('main', 'session', {
       userAgent: navigator.userAgent,
       gpu: 'gpu' in navigator,
