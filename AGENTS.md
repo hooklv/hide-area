@@ -2,6 +2,10 @@
 
 Instructions for AI agents working in this repository. Read this before changing anything.
 
+`docs/WORKFLOW.md` states how changes reach the device: what may go straight
+to `main`, what must go on a branch, the checks required before a push, and how
+a rollback works. Read it before any code change.
+
 ## What this project is
 
 A client-only web app that measures the surface area of an irregular leather hide from a single photo. The user photographs the hide with an A4 sheet lying flat in the same plane, taps the four corners of the sheet to establish scale, taps the hide to segment it, reviews the outline, and reads the area in m², dm² and sq ft.
